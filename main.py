@@ -14,7 +14,9 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s: %(message)s',
                     level=logging.DEBUG)
 import pickle
 import os 
+import json
 from typing import List, Tuple
+from datasets import load_dataset
 
 from load_data import TripletData, DataLoader
 from utils import build_graph
@@ -110,55 +112,6 @@ def run(args):
         tokenizer.pad_token_id = (0)
         tokenizer.padding_side = 'left'
 
-        prompter = Prompter(args.prompt_template)
-
-        def tokenize(prompt, add_eos_token=True):
-            # there's probably a way to do this with the tokenizer settings
-            # but again, gotta move fast
-            result = tokenizer(
-                prompt,
-                truncation=True,
-                max_length=args.truncation_length,
-                padding=False,
-                return_tensors=None,
-            )
-            if (
-                result["input_ids"][-1] != tokenizer.eos_token_id
-                and len(result["input_ids"]) < args.truncation_length
-                and add_eos_token
-            ):
-                result["input_ids"].append(tokenizer.eos_token_id)
-                result["attention_mask"].append(1)
-
-            result["labels"] = result["input_ids"].copy()
-
-            return result
-
-        def generate_and_tokenize_prompt(data_point):
-            full_prompt = prompter.generate_prompt(
-                data_point["instruction"],
-                data_point["input"],
-                data_point["output"],
-            )
-            tokenized_full_prompt = tokenize(full_prompt)
-            if not args.train_on_inputs:
-                user_prompt = prompter.generate_prompt(
-                    data_point["instruction"], data_point["input"]
-                )
-                tokenized_user_prompt = tokenize(
-                    user_prompt, add_eos_token=args.add_eos_token
-                )
-                user_prompt_len = len(tokenized_user_prompt["input_ids"])
-
-                if args.add_eos_token:
-                    user_prompt_len -= 1
-
-                tokenized_full_prompt["labels"] = [
-                    -100
-                ] * user_prompt_len + tokenized_full_prompt["labels"][
-                    user_prompt_len:
-                ]  # could be sped up, probably
-            return tokenized_full_prompt
         
     
         lora_config = LoraConfig(
@@ -183,11 +136,64 @@ def run(args):
         ## Prepare data
         data_loader = DataLoader(args, os.path.join(args.data_path, args.dataset), ['train.txt'], 'valid.txt', )
         data_loader.generate_history()
+        id2ent, id2rel = data_loader.entity_dic, data_loader.relation_dic
         
         # valid data in fine-tune and test data in inference
         test_samples = data_loader.load_test_quadruples()
 
         val_set_size = args.val_size
+
+        ## dump prompt 
+        prompt_save_file = os.path.join(args.prompt_path, args.dataset, args.base_model)
+        ## TODO check file
+        prompts = []
+        template_path = os.path.join(args.template_path, args.base_model)
+        prompter = Prompter(template_path, id2ent, id2rel)
+        for sample in test_samples:
+            h, r, t, ts = sample
+            history_list = data_loader.search_history(h, r, args.history_length, 'right')
+            prompt = prompter.prepare_prompt((h, r, ts), history_list, answer=t)
+            prompts.append(prompt)
+
+            if args.add_reciprocal:
+                # TODO
+                pass
+        json.dump(prompts, open(prompt_save_file, 'w'))
+
+        # generate dataset
+        def tokenize(prompt, add_eos_token=True):
+            # there's probably a way to do this with the tokenizer settings
+            # but again, gotta move fast
+            result = tokenizer(
+                prompt,
+                truncation=True,
+                max_length=args.truncation_length,
+                padding=False,
+                return_tensors=None,
+            )
+            if (
+                result["input_ids"][-1] != tokenizer.eos_token_id
+                and len(result["input_ids"]) < args.truncation_length
+                and add_eos_token
+            ):
+                result["input_ids"].append(tokenizer.eos_token_id)
+                result["attention_mask"].append(1)
+
+            result["labels"] = result["input_ids"].copy()
+
+            return result
+
+        def generate_and_tokenize_prompt(data_point):
+            full_prompt = prompter.full_prompt(
+                data_point["instruction"],
+                data_point["input"],
+                data_point["output"],
+            )
+            tokenized_full_prompt = tokenize(full_prompt)
+            return tokenized_full_prompt
+        data = load_dataset('json', prompt_save_file)
+        train_data = (data['train'].shuffle().map(generate_and_tokenize_prompt))
+        
         trainer = Trainer(
             model=prefix_added_lora_model,
             train_dataset=train_data,
@@ -217,7 +223,20 @@ def run(args):
             ),
         )
 
+        model.config.use_cache = False
+        old_state_dict = model.state_dict
+        model.state_dict = (
+            lambda self, *_, **__: get_peft_model_state_dict(
+                self, old_state_dict()
+            )
+        ).__get__(model, type(model))
+        trainer.train()
 
+        output_save_dir = os.path.join(args.output_dir, args.dataset, args.base_model)
+        model.save_pretrained(output_save_dir)
+        torch.save(prefix_added_lora_model.embeddings, os.path.join(output_save_dir, "embedding.pth"))
+    
+    ## TODO inference, maybe placing in another file
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='LLM for TKGC')
@@ -225,6 +244,8 @@ if __name__ == "__main__":
     parser.add_argument('--data_path', type=str, default='./data', help='data path')
     parser.add_argument("--dataset", type=str, default='ICEWS14', help='select dataset')
     parser.add_argument("--save_path", type=str, default='./pretrained_emb', help='embedding save path')
+    parser.add_argument("--template_path", type=str, default='./template', help='prompt template path')
+    parser.add_argument("--prompt-path", type=str, default='./prompts', help='prompt save path')
     parser.add_argument("--gpu", type=int, default=1, help='gpu id')
 
     # Configure for global KGE

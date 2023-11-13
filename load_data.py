@@ -44,7 +44,7 @@ class DataLoader(object):
             dic.update({b : a})
         return dic
     
-    def load_quadruples(self, files, direction):
+    def load_quadruples(self, files, direction='right'):
         assert direction in ['left', 'right']
         search_dic = dict()
 
@@ -97,7 +97,9 @@ class DataLoader(object):
         
         return None
     
-    def search_history(self, search_dict, ent, rel, history_length):
+    def search_history(self, ent, rel, history_length, direction='right'):
+        assert direction in ['right', 'left']
+        search_dict = self.head_search if direction == 'right' else self.tail_search
         if ent not in search_dict:
             return []
         ## priority selection of the same schema
@@ -105,8 +107,8 @@ class DataLoader(object):
         # schema_search_history = sorted(schema_search_history.items(), key=lambda x : x[0], reverse=True)
         tot = []
         for k, v in schema_search_history.items():
-            for tail in v:
-                tot.append((k, tail))
+            for tail in v[rel]:
+                tot.append((ent, rel, tail, k))
         tot = sorted(tot, key=lambda x : x[0])
         if len(tot) >= history_length:
             return tot[ -history_length : ]
@@ -116,7 +118,7 @@ class DataLoader(object):
                 if another_rel == rel:
                     continue
                 for pair_ent in search_dict[ent][timestamp][another_rel]:
-                    tot.append((timestamp, pair_ent))
+                    tot.append((ent, another_rel, pair_ent, timestamp))
                     leng += 1
                     if leng == history_length:
                         break
