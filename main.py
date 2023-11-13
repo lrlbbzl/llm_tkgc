@@ -37,6 +37,8 @@ from peft import (
     set_peft_model_state_dict,
 )
 
+import warnings
+warnings.filterwarnings("ignore")
 
 def run(args):
     use_cuda = args.gpu >= 0 and torch.cuda.is_available()
@@ -49,6 +51,10 @@ def run(args):
     g, train_data = build_graph(num_nodes, num_rels, train_data, use_cuda, args.gpu)
     g = g.to(device)
     train_data.to(device)
+
+    kge_ent_embs_path = os.path.join(args.save_path, 'entity_emb_{}.pkl'.format(args.score_func))
+    kge_rel_embs_path = os.path.join(args.save_path, 'relation_emb_{}.pkl'.format(args.score_func))
+
     
     if args.do_pretrain:
         logging.info('*' * 20 + 'Start pretraining' + '*' * 20)
@@ -80,17 +86,19 @@ def run(args):
 
             logging.info("Epoch {:04d} in static KGE | Ave Loss: {:.4f} ".format(epoch, sum(losses) / len(losses)))
 
-        pickle.dump(global_model.ent_embedding, open(os.path.join(args.save_path, 'entity_emb_gnn_{}.pkl'.format(args.score_func)), 'wb'))
-        pickle.dump(global_model.rel_embedding, open(os.path.join(args.save_path, 'relation_emb_gnn_{}.pkl'.format(args.score_func)), 'wb'))
+        pickle.dump(global_model.ent_embedding, open(kge_ent_embs_path, 'wb'))
+        pickle.dump(global_model.rel_embedding, open(kge_rel_embs_path, 'wb'))
 
     else:
-        #TODO
-        # Check the file and load
-        pass
+        if os.path.exists(kge_ent_embs_path) and os.path.exists(kge_rel_embs_path):
+            pass
+        else:
+            raise Exception("KGE files do not exist!")
 
     if args.do_finetune:
         logging.info('*' * 20 + 'Start fine-tuning' + '*' * 20)
 
+        llm_path = os.path.join(args.base_model_path, args.base_model)
         gradient_accumulation_steps = args.batch_size // args.sm_batch_size
 
         # training setting
@@ -102,12 +110,12 @@ def run(args):
             gradient_accumulation_steps = gradient_accumulation_steps // world_size
 
         model = LlamaForCausalLM.from_pretrained(
-            args.base_model,
+            llm_path,
             torch_dtype=torch.float32,
             device_map=device_map
         )
         
-        tokenizer = LlamaTokenizer.from_pretrained(args.base_model)
+        tokenizer = LlamaTokenizer.from_pretrained(llm_path)
 
         tokenizer.pad_token_id = (0)
         tokenizer.padding_side = 'left'
@@ -118,15 +126,13 @@ def run(args):
             r=args.lora_rank,
             lora_alpha=args.lora_alpha,
             target_modules=args.lora_target_modules,
-            lora_dropout=args.dropout,
+            lora_dropout=args.lora_dropout,
             bias='none',
-            task='CAUSAL_LM'
+            task_type='CAUSAL_LM'
         )
 
         model = get_peft_model(model, lora_config)
-        load_ent_path = os.path.join(args.save_path, 'entity_emb_{}.pkl'.format(args.score_func))
-        load_rel_path = os.path.join(args.save_path, 'relation_emb_{}.pkl'.format(args.score_func))
-        prefix_added_lora_model = KGEAdapterLLM(model, args.num_prefix, (load_ent_path, load_rel_path))
+        prefix_added_lora_model = KGEAdapterLLM(model, args.history_length + 2, (kge_ent_embs_path, kge_rel_embs_path))
 
         if not ddp and torch.cuda.device_count() > 1:
             model.is_parallelizable = True
@@ -147,20 +153,24 @@ def run(args):
         prompt_save_file = os.path.join(args.prompt_path, args.dataset, args.base_model + '.json')
         ## TODO check file
 
-        
-        prompts = []
+
         template_path = os.path.join(args.template_path, args.base_model + '.json')
         prompter = Prompter(template_path, id2ent, id2rel)
-        for sample in test_samples:
-            h, r, t, ts = sample
-            history_list = data_loader.search_history(h, r, args.history_length, 'right')
-            prompt = prompter.prepare_prompt((h, r, ts), history_list, answer=t)
-            prompts.append(prompt)
 
-            if args.add_reciprocal:
-                # TODO
-                pass
-        json.dump(prompts, open(prompt_save_file, 'w'))
+        if os.path.exists(prompt_save_file):
+            prompts = json.load(open(prompt_save_file, 'r'))
+        else:
+            prompts = []
+            for sample in tqdm(test_samples):
+                h, r, t, ts = sample
+                history_list = data_loader.search_history(h, r, args.history_length, 'right')
+                prompt = prompter.prepare_prompt((h, r, ts), history_list, answer=t)
+                prompts.append(prompt)
+
+                if args.add_reciprocal:
+                    # TODO
+                    pass
+            json.dump(prompts, open(prompt_save_file, 'w'))
 
         # generate dataset
         def tokenize(prompt, add_eos_token=True):
@@ -193,12 +203,14 @@ def run(args):
             )
             tokenized_full_prompt = tokenize(full_prompt)
             return tokenized_full_prompt
-        data = load_dataset('json', prompt_save_file)
+        data = load_dataset('json', data_files=prompt_save_file)
         train_data = (data['train'].shuffle().map(generate_and_tokenize_prompt))
-        
+        import pickle
+        pickle.dump(train_data, open('temp.pkl', 'wb'))
         trainer = Trainer(
             model=prefix_added_lora_model,
             train_dataset=train_data,
+            eval_dataset=None,
             args=TrainingArguments(
                 per_device_train_batch_size=args.sm_batch_size,
                 gradient_accumulation_steps=gradient_accumulation_steps,
@@ -243,11 +255,13 @@ def run(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='LLM for TKGC')
 
-    parser.add_argument('--data_path', type=str, default='./data', help='data path')
+    parser.add_argument('--data-path', type=str, default='./data', help='data path')
     parser.add_argument("--dataset", type=str, default='ICEWS14', help='select dataset')
-    parser.add_argument("--save_path", type=str, default='./pretrained_emb', help='embedding save path')
-    parser.add_argument("--template_path", type=str, default='./template', help='prompt template path')
+    parser.add_argument("--save-path", type=str, default='./pretrained_emb', help='embedding save path')
+    parser.add_argument("--template-path", type=str, default='./templates', help='prompt template path')
     parser.add_argument("--prompt-path", type=str, default='./prompts', help='prompt save path')
+    parser.add_argument("--base-model-path", type=str, default='./models', help='base llm')
+    parser.add_argument("--base-model", type=str, default='Llama-2-7b-ms', help='base llm')
     parser.add_argument("--gpu", type=int, default=1, help='gpu id')
 
     # Configure for global KGE
@@ -266,12 +280,11 @@ if __name__ == "__main__":
     parser.add_argument("--do-finetune", action='store_true', help='whether fine-tuning')
 
     # Configure for LLM fine-tune
-    parser.add_argument("--base-model", type=str, default='Llama-7b', help='base llm')
     parser.add_argument("--batch-size", type=int, default=8, help='fine-tuning batch size')
     parser.add_argument("--sm-batch-size", type=int, default=8, help='small batch size')
     parser.add_argument("--n-ft-epoch", type=int, default=2, help='fine-tuning epoch')
     parser.add_argument("--lr", type=float, default=1e-4, help='learning rate during fine-tuning')
-    parser.add_argument("--truncation-length", type=int, default=256, help='truncation length limit')
+    parser.add_argument("--truncation-length", type=int, default=512, help='truncation length limit')
     parser.add_argument("--train-on-inputs", type=bool, default=True, help='whether training on inputs data')
     parser.add_argument("--add-eos-tokens", type=bool, default=False, help='whether adding eos')
     parser.add_argument("--prompt-template", type=str, default='llama', help='prompt template')
@@ -282,9 +295,10 @@ if __name__ == "__main__":
     parser.add_argument("--lora-target-modules", type=List[str], default=['q_proj', 'v_proj'], help='lora target modules')
 
     # Configure
-    parser.add_argument("--history-length", type=int, default=10, help='history references')
+    parser.add_argument("--history-length", type=int, default=8, help='history references')
     parser.add_argument("--val-size", type=int, default=0, help='vaild dataset length')
     parser.add_argument("--output-dir", type=str, default='./outputs', help='output dirs')
+    parser.add_argument("--add-reciprocal", type=bool, default=False, help='whether do reverse reasoning')
     args = parser.parse_args()
     
 

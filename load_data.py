@@ -47,14 +47,14 @@ class DataLoader(object):
     def load_quadruples(self, files, direction='right'):
         assert direction in ['left', 'right']
         search_dic = dict()
-
+        sm = 0
         for file in files:
             fp = open(os.path.join(self.dataset, file), 'r', encoding='utf-8')
             for line in fp.readlines():
                 h, r, t, tim = list(map(lambda x : int(x), line.strip().split('\t')))
                 if h not in self.entity_dic or t not in self.entity_dic or r not in self.relation_dic:
                     continue
-                head, rel, tail = self.entity_dic[h], self.entity_dic[t], self.relation_dic[r]
+                head, rel, tail = self.entity_dic[h], self.relation_dic[r], self.entity_dic[t]
 
                 if direction == 'right':
                     ## tail batch
@@ -82,7 +82,8 @@ class DataLoader(object):
         fp = open(os.path.join(self.dataset, self.inference_data_path), 'r', encoding='utf-8')
         for line in fp.readlines():
             h, r, t, tim = list(map(lambda x : int(x), line.strip().split('\t')))
-            test_samples.append((h, r, t, tim))
+            head, rel, tail = self.entity_dic[h], self.relation_dic[r], self.entity_dic[t]
+            test_samples.append((head, rel, tail, tim))
         return test_samples
 
 
@@ -103,7 +104,7 @@ class DataLoader(object):
         if ent not in search_dict:
             return []
         ## priority selection of the same schema
-        schema_search_history = { k : dict({rel : v[rel]}) for k, v in search_dict[ent].items() if rel in v}
+        schema_search_history = { k : dict({rel : v[rel]}) for k, v in search_dict[ent].items() if rel in v} # {time : {rel : list_of_tail}}
         # schema_search_history = sorted(schema_search_history.items(), key=lambda x : x[0], reverse=True)
         tot = []
         for k, v in schema_search_history.items():
@@ -135,3 +136,16 @@ class DataLoader(object):
         history_list = self.search_history(search_dict, ent, rel, self.args.history_length)
 
         return history_list
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='LLM for TKGC')
+
+    parser.add_argument('--data-path', type=str, default='./data', help='data path')
+    parser.add_argument("--dataset", type=str, default='ICEWS14', help='select dataset')
+    args = parser.parse_args()
+
+    loader = DataLoader(args, os.path.join(args.data_path, args.dataset), ['train.txt'], 'valid.txt',)
+    loader.generate_history()
+    import pickle
+    pickle.dump(loader.head_search, open('head_search.pkl', 'wb'))
