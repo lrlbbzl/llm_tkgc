@@ -144,10 +144,12 @@ def run(args):
         val_set_size = args.val_size
 
         ## dump prompt 
-        prompt_save_file = os.path.join(args.prompt_path, args.dataset, args.base_model)
+        prompt_save_file = os.path.join(args.prompt_path, args.dataset, args.base_model + '.json')
         ## TODO check file
+
+        
         prompts = []
-        template_path = os.path.join(args.template_path, args.base_model)
+        template_path = os.path.join(args.template_path, args.base_model + '.json')
         prompter = Prompter(template_path, id2ent, id2rel)
         for sample in test_samples:
             h, r, t, ts = sample
