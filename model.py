@@ -7,34 +7,37 @@ from transformers import LlamaForCausalLM
 from typing import Tuple, Optional, List
 
 class KGEmbedding(nn.Module):
-    def ___init__(self, ent_emb_path, rel_emb_path, dim_model, num_prefix):
+    def __init__(self, ent_path, rel_path, dim_model, num_prefix):
         super(KGEmbedding, self).__init__()
         
         self.dim_model = dim_model
-        self.emb_path = [ent_emb_path, rel_emb_path]
+        self.emb_path = [ent_path, rel_path]
         self.num_prefix = num_prefix
 
-        self.ent_emb = nn.Embedding.from_pretrained(pickle.load(open(self.emb_path[0], 'rb')))
-        self.rel_emb = nn.Embedding.from_pretrained(pickle.load(open(self.emb_path[1], 'rb')))
+        self.ent_emb = nn.Embedding.from_pretrained(pickle.load(open(self.emb_path[0], 'rb')).weight)
+        self.rel_emb = nn.Embedding.from_pretrained(pickle.load(open(self.emb_path[1], 'rb')).weight)
 
         self.kge_dim = self.ent_emb.weight.shape[1] # kge dimension
         # kge prefix is frozen
         self.ent_emb.requires_grad_(False)
         self.rel_emb.requires_grad_(False)
 
-        self.adapter_fc = nn.Linear(self.kge_dim, self.num_prefix * self.dim_model)
+        self.adapter_fc = nn.Linear(self.kge_dim, self.dim_model)
 
-    def forward(self, triples):
-        # Generate prefix embedding from pretrained KGE and selected triples
-        h, r, t = triples[:, 0], triples[:, 1], triples[:, 2]
-        h, r, t = self.ent_emb(h), self.rel_emb(r), self.ent_emb(t)
-
-        embs = torch.stack((h, r, t), dim=1) # (bs, 3, kge_emb)
-        prefix_emb = self.adapter_fc(embs).reshape(-1, self.num_prefix * 3, self.dim_model)
-
-        return prefix_emb
-
+    def forward(self, ls):
+        """
+        args:
+            ls: embedding space
+        """
+        ls = torch.LongTensor(ls) # (bs, num_prefix)
+        ent_idx = ls[:, torch.cat([torch.LongTensor([0]), torch.arange(2, self.num_prefix)])]
+        rel_idx = ls[:, torch.LongTensor([1])]
+        ent_embs = self.ent_emb(ent_idx) # (bs, num_prefix - 1, kge_dim)
+        rel_embs = self.rel_emb(rel_idx) # (bs, 1, kge_dim)
         
+        embs = torch.cat((ent_embs[:, :1, :], rel_embs, ent_embs[:, 1:, :]), dim=1) # (bs, num_prefix, kge_dim)
+        prefix_emb = self.adapter_fc(embs) # (bs, num_prefix, dim_model)
+        return prefix_emb
 
 
 class KGEAdapterLLM(nn.Module):
@@ -42,14 +45,13 @@ class KGEAdapterLLM(nn.Module):
         self,
         model: LlamaForCausalLM,
         num_prefix: int,
-        pretrain_emb_path = None
+        pretrain_emb_path: Tuple
     ) -> None:
         super(KGEAdapterLLM, self).__init__()
         self.llama_model = model
-
         self.embeddings = KGEmbedding(
-            ent_emb_path=pretrain_emb_path[0],
-            rel_emb_path=pretrain_emb_path[1],
+            ent_path=pretrain_emb_path[0],
+            rel_path=pretrain_emb_path[1],
             dim_model=4096,
             num_prefix=num_prefix
         )
@@ -69,8 +71,7 @@ class KGEAdapterLLM(nn.Module):
         return_dict: Optional[bool] = None,
         embedding_ids: torch.LongTensor = None
     ):
-        kg_embeds = self.embeddings(embedding_ids)
-        # print(kg_embeds.shape)
+        kg_embeds = self.embeddings(embedding_ids) # (bs, 2 + history_length, kge_size)
         batch_size, seq_len, _ = kg_embeds.shape
         token_embeds = self.llama_model.model.model.embed_tokens(input_ids)
         input_embeds = torch.cat((kg_embeds, token_embeds), dim=1)
@@ -90,3 +91,4 @@ class KGEAdapterLLM(nn.Module):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
+

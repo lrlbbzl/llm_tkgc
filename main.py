@@ -5,6 +5,7 @@
 
 import torch
 import argparse
+import fire
 import warnings
 warnings.filterwarnings("ignore")
 import logging
@@ -101,7 +102,7 @@ def run(args):
         llm_path = os.path.join(args.base_model_path, args.base_model)
         gradient_accumulation_steps = args.batch_size // args.sm_batch_size
 
-        # training setting
+        ## training setting
         device_map = "auto"
         world_size = int(os.environ.get("WORLD_SIZE", 1))
         ddp = world_size != 1
@@ -109,54 +110,20 @@ def run(args):
             device_map = {"": int(os.environ.get("LOCAL_RANK") or 0)}
             gradient_accumulation_steps = gradient_accumulation_steps // world_size
 
-        model = LlamaForCausalLM.from_pretrained(
-            llm_path,
-            torch_dtype=torch.float32,
-            device_map=device_map
-        )
-        
-        tokenizer = LlamaTokenizer.from_pretrained(llm_path)
-
-        tokenizer.pad_token_id = (0)
-        tokenizer.padding_side = 'left'
-
-        
-    
-        lora_config = LoraConfig(
-            r=args.lora_rank,
-            lora_alpha=args.lora_alpha,
-            target_modules=args.lora_target_modules,
-            lora_dropout=args.lora_dropout,
-            bias='none',
-            task_type='CAUSAL_LM'
-        )
-
-        model = get_peft_model(model, lora_config)
-        prefix_added_lora_model = KGEAdapterLLM(model, args.history_length + 2, (kge_ent_embs_path, kge_rel_embs_path))
-
-        if not ddp and torch.cuda.device_count() > 1:
-            model.is_parallelizable = True
-            model.model_parallel = True
-
 
         ## Prepare data
         data_loader = DataLoader(args, os.path.join(args.data_path, args.dataset), ['train.txt'], 'valid.txt', )
         data_loader.generate_history()
         id2ent, id2rel = data_loader.entity_dic, data_loader.relation_dic
-        
-        # valid data in fine-tune and test data in inference
+        ### valid data in fine-tune and test data in inference
         test_samples = data_loader.load_test_quadruples()
-
         val_set_size = args.val_size
-
-        ## dump prompt 
+        ### dump prompt 
         prompt_save_file = os.path.join(args.prompt_path, args.dataset, args.base_model + '.json')
-        ## TODO check file
-
+        ### TODO check file
 
         template_path = os.path.join(args.template_path, args.base_model + '.json')
         prompter = Prompter(template_path, id2ent, id2rel)
-
         if os.path.exists(prompt_save_file):
             prompts = json.load(open(prompt_save_file, 'r'))
         else:
@@ -172,7 +139,19 @@ def run(args):
                     pass
             json.dump(prompts, open(prompt_save_file, 'w'))
 
-        # generate dataset
+
+        ## tokenize
+        model = LlamaForCausalLM.from_pretrained(
+            llm_path,
+            torch_dtype=torch.float16,
+            device_map=device_map,
+        )
+        tokenizer = LlamaTokenizer.from_pretrained(llm_path)
+        tokenizer.pad_token_id = (
+            0  
+        )
+        tokenizer.padding_side = "left" 
+
         def tokenize(prompt, add_eos_token=True):
             # there's probably a way to do this with the tokenizer settings
             # but again, gotta move fast
@@ -203,14 +182,32 @@ def run(args):
             )
             tokenized_full_prompt = tokenize(full_prompt)
             return tokenized_full_prompt
+
         data = load_dataset('json', data_files=prompt_save_file)
-        train_data = (data['train'].shuffle().map(generate_and_tokenize_prompt))
-        import pickle
-        pickle.dump(train_data, open('temp.pkl', 'wb'))
+        train_data = data["train"].shuffle().map(generate_and_tokenize_prompt)
+        val_data = None
+
+        
+        ## create peft model and trainer
+        if not ddp and torch.cuda.device_count() > 1:
+            # keeps Trainer from trying its own DataParallelism when more than 1 gpu is available
+            model.is_parallelizable = True
+            model.model_parallel = True
+        config = LoraConfig(
+            r=args.lora_rank,
+            lora_alpha=args.lora_alpha,
+            target_modules=args.lora_target_modules,
+            lora_dropout=args.lora_dropout,
+            bias='none',
+            task_type='CAUSAL_LM'
+        )
+        model = get_peft_model(model, config)
+        # prefix_added_lora_model = KoPAWithAdapter(model, num_prefix, kge_model=kge_model)
+        prefix_added_lora_model = KGEAdapterLLM(model, args.history_length + 2, (kge_ent_embs_path, kge_rel_embs_path))
         trainer = Trainer(
             model=prefix_added_lora_model,
             train_dataset=train_data,
-            eval_dataset=None,
+            eval_dataset=val_data,
             args=TrainingArguments(
                 per_device_train_batch_size=args.sm_batch_size,
                 gradient_accumulation_steps=gradient_accumulation_steps,
@@ -236,21 +233,23 @@ def run(args):
                 tokenizer, pad_to_multiple_of=8, return_tensors="pt", padding=True
             ),
         )
-
         model.config.use_cache = False
+
         old_state_dict = model.state_dict
         model.state_dict = (
             lambda self, *_, **__: get_peft_model_state_dict(
                 self, old_state_dict()
             )
         ).__get__(model, type(model))
-        trainer.train()
 
-        output_save_dir = os.path.join(args.output_dir, args.dataset, args.base_model)
-        model.save_pretrained(output_save_dir)
-        torch.save(prefix_added_lora_model.embeddings, os.path.join(output_save_dir, "embedding.pth"))
-    
-    ## TODO inference, maybe placing in another file
+        import sys
+        if torch.__version__ >= "2" and sys.platform != "win32":
+            model = torch.compile(model)
+
+        trainer.train(resume_from_checkpoint=None)
+
+        model.save_pretrained(args.output_dir)
+        torch.save(prefix_added_lora_model.embeddings, os.path.join(args.output_dir, "embeddings.pth"))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='LLM for TKGC')
@@ -284,15 +283,15 @@ if __name__ == "__main__":
     parser.add_argument("--sm-batch-size", type=int, default=8, help='small batch size')
     parser.add_argument("--n-ft-epoch", type=int, default=2, help='fine-tuning epoch')
     parser.add_argument("--lr", type=float, default=1e-4, help='learning rate during fine-tuning')
-    parser.add_argument("--truncation-length", type=int, default=512, help='truncation length limit')
+    parser.add_argument("--truncation-length", type=int, default=768, help='truncation length limit')
     parser.add_argument("--train-on-inputs", type=bool, default=True, help='whether training on inputs data')
     parser.add_argument("--add-eos-tokens", type=bool, default=False, help='whether adding eos')
     parser.add_argument("--prompt-template", type=str, default='llama', help='prompt template')
     # Configure for lora
     parser.add_argument("--lora-rank", type=int, default=16, help='lora rank')
     parser.add_argument("--lora-alpha", type=int, default=16, help='lora alpha')
-    parser.add_argument("--lora-dropout", type=float, default=0.1, help='dropout rate during ft')
-    parser.add_argument("--lora-target-modules", type=List[str], default=['q_proj', 'v_proj'], help='lora target modules')
+    parser.add_argument("--lora-dropout", type=float, default=0.05, help='dropout rate during ft')
+    parser.add_argument("--lora-target-modules", type=List[str], default=['q_proj', 'k_proj', 'v_proj', 'o_proj'], help='lora target modules')
 
     # Configure
     parser.add_argument("--history-length", type=int, default=8, help='history references')
@@ -303,7 +302,7 @@ if __name__ == "__main__":
     
 
     # start
-    run(args)
+    fire.Fire(run(args))
 
 
 
