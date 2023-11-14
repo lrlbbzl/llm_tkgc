@@ -131,6 +131,8 @@ def run(args):
             for sample in tqdm(test_samples):
                 h, r, t, ts = sample
                 history_list = data_loader.search_history(h, r, args.history_length, 'right')
+                if len(history_list) != args.history_length:
+                    continue
                 prompt = prompter.prepare_prompt((h, r, ts), history_list, answer=t)
                 prompts.append(prompt)
 
@@ -204,6 +206,8 @@ def run(args):
         model = get_peft_model(model, config)
         # prefix_added_lora_model = KoPAWithAdapter(model, num_prefix, kge_model=kge_model)
         prefix_added_lora_model = KGEAdapterLLM(model, args.history_length + 2, (kge_ent_embs_path, kge_rel_embs_path))
+        # import pickle
+        # pickle.dump(train_data, open('temp.pkl', 'wb'))
         trainer = Trainer(
             model=prefix_added_lora_model,
             train_dataset=train_data,
@@ -221,13 +225,13 @@ def run(args):
                 save_strategy="steps",
                 eval_steps=None,
                 save_steps=5000,
-                output_dir=args.output_dir,
+                output_dir=args.log_dir,
                 save_total_limit=2,
                 load_best_model_at_end=True if val_set_size > 0 else False,
                 ddp_find_unused_parameters=False if ddp else None,
                 group_by_length=False,
-                report_to=None,
-                run_name=None,
+                report_to='wandb',
+                run_name='kge-llama-2-7b-ms-tkgc',
             ),
             data_collator=DataCollatorForSeq2Seq(
                 tokenizer, pad_to_multiple_of=8, return_tensors="pt", padding=True
@@ -280,7 +284,7 @@ if __name__ == "__main__":
 
     # Configure for LLM fine-tune
     parser.add_argument("--batch-size", type=int, default=8, help='fine-tuning batch size')
-    parser.add_argument("--sm-batch-size", type=int, default=8, help='small batch size')
+    parser.add_argument("--sm-batch-size", type=int, default=2, help='small batch size')
     parser.add_argument("--n-ft-epoch", type=int, default=2, help='fine-tuning epoch')
     parser.add_argument("--lr", type=float, default=1e-4, help='learning rate during fine-tuning')
     parser.add_argument("--truncation-length", type=int, default=768, help='truncation length limit')
@@ -297,12 +301,13 @@ if __name__ == "__main__":
     parser.add_argument("--history-length", type=int, default=8, help='history references')
     parser.add_argument("--val-size", type=int, default=0, help='vaild dataset length')
     parser.add_argument("--output-dir", type=str, default='./outputs', help='output dirs')
+    parser.add_argument("--log-dir", type=str, default='./logs', help='logs save dir')
     parser.add_argument("--add-reciprocal", type=bool, default=False, help='whether do reverse reasoning')
     args = parser.parse_args()
     
 
     # start
-    fire.Fire(run(args))
+    run(args)
 
 
 

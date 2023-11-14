@@ -114,6 +114,8 @@ class DataLoader(object):
         if len(tot) >= history_length:
             return tot[ -history_length : ]
         leng = len(tot)
+
+        ## padding history by entity itself
         for timestamp in list(sorted(search_dict[ent].keys(), reverse=True)):
             for another_rel in search_dict[ent][timestamp]:
                 if another_rel == rel:
@@ -127,6 +129,18 @@ class DataLoader(object):
                     break
             if leng == history_length:
                 break
+
+        ## padding history by relation
+        if leng != history_length:
+            for another_ent, dic in search_dict.items():
+                for timestamp in list(sorted(dic.keys(), reverse=True)):
+                    if rel in dic[timestamp]:
+                        tot.append((another_ent, rel, dic[timestamp][rel][0], timestamp))
+                        leng += 1
+                    if leng == history_length:
+                        break
+                if leng == history_length:
+                    break
         
         return tot
 
