@@ -105,3 +105,41 @@ def euc_distance(x: Tensor, y: Tensor, eval_mode=False) -> Tensor:
     return x2 + y2 - 2 * xy
 
 
+
+
+def tokenize(prompt, tokenizer, length_limit, add_eos_token=True):
+            # there's probably a way to do this with the tokenizer settings
+            # but again, gotta move fast
+            result = tokenizer(
+                prompt,
+                truncation=True,
+                max_length=length_limit,
+                padding=False,
+                return_tensors=None,
+            )
+            if (
+                result["input_ids"][-1] != tokenizer.eos_token_id
+                and len(result["input_ids"]) < length_limit
+                and add_eos_token
+            ):
+                result["input_ids"].append(tokenizer.eos_token_id)
+                result["attention_mask"].append(1)
+
+            result["labels"] = result["input_ids"].copy()
+
+            return result
+
+def generate_and_tokenize_prompt(data_point, prompter, tokenizer, length_limit, if_test: bool):
+    if not if_test:
+        full_prompt = prompter.full_prompt(
+            data_point["instruction"],
+            data_point["input"],
+            data_point["output"],
+        )
+    else:
+        full_prompt = prompter.test_prompt(
+            data_point["instruction"],
+            data_point["input"],
+        )
+    tokenized_full_prompt = tokenize(full_prompt, tokenizer, length_limit)
+    return tokenized_full_prompt

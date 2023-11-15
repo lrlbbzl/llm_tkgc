@@ -111,8 +111,8 @@ class gnn_kge(nn.Module):
 
     def gnn_forward(self, ):
         total_e = self.ent_embedding(self.graph.ndata['id'].squeeze(1))
-        self.graph.edata['r_h'] = self.rel_embedding(self.graph.edata['type'])
-        total_e = self.gnn_model(self.graph, total_e)
+        # self.graph.edata['r_h'] = self.rel_embedding(self.graph.edata['type'])
+        # total_e = self.gnn_model(self.graph, total_e)
         return total_e
         
     def forward(self, triples, new_feature):

@@ -50,7 +50,9 @@ from typing import Union
 class Prompter(object):
     def __init__(self, template, id2ent, id2rel):
         super(Prompter, self).__init__()
-        self.template = json.load(open(template, 'r'))['template']
+        template = json.load(open(template, 'r'))
+        self.template = template['template']
+        self.test_template = template['test_template']
         print(template)
         self.id2ent = id2ent
         self.id2rel = id2rel
@@ -91,3 +93,6 @@ class Prompter(object):
     
     def full_prompt(self, instruction, input, output):
         return self.template.format(instruction=instruction, input=input, output=output)
+
+    def test_prompt(self, instruction, input):
+        return self.test_template.format(instruction=instruction, input=input)

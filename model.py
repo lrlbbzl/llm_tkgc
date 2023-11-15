@@ -5,6 +5,9 @@ import torch.nn.functional as F
 
 from transformers import LlamaForCausalLM
 from typing import Tuple, Optional, List
+import logging
+logging.basicConfig(format='%(asctime)s - %(levelname)s: %(message)s',
+                    level=logging.DEBUG)
 
 class KGEmbedding(nn.Module):
     def __init__(self, ent_path, rel_path, dim_model, num_prefix):
@@ -17,6 +20,7 @@ class KGEmbedding(nn.Module):
         self.ent_emb = nn.Embedding.from_pretrained(pickle.load(open(self.emb_path[0], 'rb')).weight)
         self.rel_emb = nn.Embedding.from_pretrained(pickle.load(open(self.emb_path[1], 'rb')).weight)
 
+
         self.kge_dim = self.ent_emb.weight.shape[1] # kge dimension
         # kge prefix is frozen
         self.ent_emb.requires_grad_(False)
@@ -27,9 +31,8 @@ class KGEmbedding(nn.Module):
     def forward(self, ls):
         """
         args:
-            ls: embedding space
-        """
-        ls = torch.LongTensor(ls) # (bs, num_prefix)
+            ls: embedding space # (bs, num_prefix)
+        """ 
         ent_idx = ls[:, torch.cat([torch.LongTensor([0]), torch.arange(2, self.num_prefix)])]
         rel_idx = ls[:, torch.LongTensor([1])]
         ent_embs = self.ent_emb(ent_idx) # (bs, num_prefix - 1, kge_dim)
@@ -54,7 +57,7 @@ class KGEAdapterLLM(nn.Module):
             rel_path=pretrain_emb_path[1],
             dim_model=4096,
             num_prefix=num_prefix
-        )
+        ).cuda()
         
     
     def forward(

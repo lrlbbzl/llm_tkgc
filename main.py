@@ -7,6 +7,7 @@ import torch
 import argparse
 import fire
 import warnings
+from functools import partial
 warnings.filterwarnings("ignore")
 import logging
 from copy import deepcopy
@@ -20,7 +21,7 @@ from typing import List, Tuple
 from datasets import load_dataset
 
 from load_data import TripletData, DataLoader
-from utils import build_graph
+from utils import build_graph, generate_and_tokenize_prompt
 from pretrain_nn import gnn_kge
 from prompt import Prompter
 from model import KGEAdapterLLM
@@ -29,6 +30,9 @@ from torch.optim import AdamW
 from torch import nn
 from transformers import get_linear_schedule_with_warmup
 from transformers import LlamaForCausalLM, LlamaTokenizer, Trainer, TrainingArguments, DataCollatorForSeq2Seq
+from torch.cuda.amp import autocast
+from torch.cuda.amp import GradScaler
+
 
 from peft import (
     LoraConfig,
@@ -59,6 +63,7 @@ def run(args):
     
     if args.do_pretrain:
         logging.info('*' * 20 + 'Start pretraining' + '*' * 20)
+        scaler = GradScaler()
         global_model = gnn_kge(g, num_nodes, num_rels, args.hidden_size, args.score_func, args.global_layers,
                                 args.global_heads, args.global_gnn).to(device)
         kge_optimizer = AdamW(global_model.parameters(), lr=args.kge_lr, weight_decay=args.weight_decay)
@@ -154,39 +159,10 @@ def run(args):
         )
         tokenizer.padding_side = "left" 
 
-        def tokenize(prompt, add_eos_token=True):
-            # there's probably a way to do this with the tokenizer settings
-            # but again, gotta move fast
-            result = tokenizer(
-                prompt,
-                truncation=True,
-                max_length=args.truncation_length,
-                padding=False,
-                return_tensors=None,
-            )
-            if (
-                result["input_ids"][-1] != tokenizer.eos_token_id
-                and len(result["input_ids"]) < args.truncation_length
-                and add_eos_token
-            ):
-                result["input_ids"].append(tokenizer.eos_token_id)
-                result["attention_mask"].append(1)
-
-            result["labels"] = result["input_ids"].copy()
-
-            return result
-
-        def generate_and_tokenize_prompt(data_point):
-            full_prompt = prompter.full_prompt(
-                data_point["instruction"],
-                data_point["input"],
-                data_point["output"],
-            )
-            tokenized_full_prompt = tokenize(full_prompt)
-            return tokenized_full_prompt
 
         data = load_dataset('json', data_files=prompt_save_file)
-        train_data = data["train"].shuffle().map(generate_and_tokenize_prompt)
+        partial_func = partial(generate_and_tokenize_prompt, prompter=prompter, tokenizer=tokenizer, length_limit=args.truncation_length, if_test=False)
+        train_data = data["train"].shuffle().map(partial_func)
         val_data = None
 
         
