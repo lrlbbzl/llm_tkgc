@@ -86,7 +86,8 @@ def inference(args):
         input_ids = model_inputs.input_ids.to(device)
         token_embeds = model.model.model.embed_tokens(input_ids)
         ## float16 for Half-float inference
-        prefix = torch.tensor(prefix.clone(), dtype=torch.float16)
+        if args.half:
+            prefix = torch.tensor(prefix.clone(), dtype=torch.float16)
         input_embeds = torch.cat((prefix, token_embeds), dim=1)
         generate_ids = model.generate(
             inputs_embeds=input_embeds, 
