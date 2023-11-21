@@ -1,4 +1,4 @@
 {
-    "template": "{instruction}\n\n###Input:\n{input}\n\n###Output:\n{output}\n",
-    "test_template": "{instruction}\n\n###Input:\n{input}\n\n###Output:\n"
+    "query": "Given contexts consisting of multiple quadruplets in the form of {time}: [{subject}, {relation}, {object}], please predict the missing entity in the query quadruplet in the form of {time}: [{subject}, {relation}, ].\n\n###Input:\n{query}\n\n###Response:\n",
+    "response": "The missing entity of query quadruplet is {response}."
 }

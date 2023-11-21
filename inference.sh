@@ -1,3 +1,4 @@
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=5
 python inference.py --dataset ICEWS14 \
-    --half True
+    --output-dir './outputs/float16_adamwhf_nokbit' \
+    --lora-weights-path './outputs/float16_adamwhf_nokbit'

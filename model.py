@@ -51,7 +51,8 @@ class KGEAdapterLLM(nn.Module):
         pretrain_emb_path: Tuple
     ) -> None:
         super(KGEAdapterLLM, self).__init__()
-        self.llama_model = model
+        self.model = model
+        self.num_prefix = num_prefix
         self.embeddings = KGEmbedding(
             ent_path=pretrain_emb_path[0],
             rel_path=pretrain_emb_path[1],
@@ -76,13 +77,13 @@ class KGEAdapterLLM(nn.Module):
     ):
         kg_embeds = self.embeddings(embedding_ids) # (bs, 2 + history_length, kge_size)
         batch_size, seq_len, _ = kg_embeds.shape
-        token_embeds = self.llama_model.model.model.embed_tokens(input_ids)
+        token_embeds = self.model.model.model.embed_tokens(input_ids)
         input_embeds = torch.cat((kg_embeds, token_embeds), dim=1)
         prefix_mask = torch.ones((batch_size, seq_len))
         prefix_labels = torch.full((batch_size, seq_len), fill_value=-100, dtype=torch.long)
         new_attention_mask = torch.cat((prefix_mask.cuda(), attention_mask), dim=-1)
         new_labels = torch.cat((prefix_labels.cuda(), labels), dim=-1)
-        return self.llama_model(
+        return self.model(
             input_ids=None,
             attention_mask=new_attention_mask,
             position_ids=position_ids,

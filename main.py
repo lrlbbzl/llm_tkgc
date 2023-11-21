@@ -5,7 +5,6 @@
 
 import torch
 import argparse
-import fire
 import warnings
 from functools import partial
 warnings.filterwarnings("ignore")
@@ -21,7 +20,7 @@ from typing import List, Tuple
 from datasets import load_dataset
 
 from load_data import TripletData, DataLoader
-from utils import build_graph, generate_and_tokenize_prompt
+from utils import build_graph, generate_and_tokenize_prompt, print_number_of_trainable_model_parameters
 from pretrain_nn import gnn_kge
 from prompt import Prompter
 from model import KGEAdapterLLM
@@ -30,9 +29,9 @@ from torch.optim import AdamW
 from torch import nn
 from transformers import get_linear_schedule_with_warmup
 from transformers import LlamaForCausalLM, LlamaTokenizer, Trainer, TrainingArguments, DataCollatorForSeq2Seq
-from torch.cuda.amp import autocast
-from torch.cuda.amp import GradScaler
+from transformers import AutoModelForCausalLM, AutoTokenizer, Seq2SeqTrainingArguments, Seq2SeqTrainer
 
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 from peft import (
     LoraConfig,
@@ -40,6 +39,7 @@ from peft import (
     get_peft_model_state_dict,
     prepare_model_for_int8_training,
     set_peft_model_state_dict,
+    prepare_model_for_kbit_training
 )
 
 import warnings
@@ -57,13 +57,14 @@ def run(args):
     g = g.to(device)
     train_data.to(device)
 
-    kge_ent_embs_path = os.path.join(args.save_path, 'entity_emb_{}.pkl'.format(args.score_func))
-    kge_rel_embs_path = os.path.join(args.save_path, 'relation_emb_{}.pkl'.format(args.score_func))
-
+    use_gnn = 'none'
+    kge_ent_embs_path = os.path.join(args.save_path, 'entity_emb_{}_{}.pkl'.format(args.score_func, use_gnn))
+    kge_rel_embs_path = os.path.join(args.save_path, 'relation_emb_{}_{}.pkl'.format(args.score_func, use_gnn))
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
     
     if args.do_pretrain:
         logging.info('*' * 20 + 'Start pretraining' + '*' * 20)
-        scaler = GradScaler()
         global_model = gnn_kge(g, num_nodes, num_rels, args.hidden_size, args.score_func, args.global_layers,
                                 args.global_heads, args.global_gnn).to(device)
         kge_optimizer = AdamW(global_model.parameters(), lr=args.kge_lr, weight_decay=args.weight_decay)
@@ -78,7 +79,7 @@ def run(args):
             samples = samples[torch.randperm(samples.shape[0]), :]
             iters = int(length // args.kge_batch_size) + 1 if length % args.kge_batch_size != 0 else length // args.kge_batch_size
             for step in tqdm(range(iters)):
-                new_feature = global_model.gnn_forward()
+                new_feature = global_model.gnn_forward(args.use_gnn)
                 batch_data = samples[args.kge_batch_size * step : min(length, args.kge_batch_size * (step + 1))]
                 score = global_model(batch_data, new_feature)
                 loss = loss_fn(score, batch_data[:, 2])
@@ -99,7 +100,9 @@ def run(args):
         if os.path.exists(kge_ent_embs_path) and os.path.exists(kge_rel_embs_path):
             pass
         else:
-            raise Exception("KGE files do not exist!")
+            raise Exception("KGE files {} do not exist!".format(kge_ent_embs_path))
+
+
 
     if args.do_finetune:
         logging.info('*' * 20 + 'Start fine-tuning' + '*' * 20)
@@ -125,7 +128,6 @@ def run(args):
         val_set_size = args.val_size
         ### dump prompt 
         prompt_save_file = os.path.join(args.prompt_path, args.dataset, args.base_model + '.json')
-        ### TODO check file
 
         template_path = os.path.join(args.template_path, args.base_model + '.json')
         prompter = Prompter(template_path, id2ent, id2rel)
@@ -138,7 +140,7 @@ def run(args):
                 history_list = data_loader.search_history(h, r, args.history_length, 'right')
                 if len(history_list) != args.history_length:
                     continue
-                prompt = prompter.prepare_prompt((h, r, ts), history_list, answer=t)
+                prompt = prompter.prepare_prompt((h, r, ts), history_list, response=t)
                 prompts.append(prompt)
 
                 if args.add_reciprocal:
@@ -147,18 +149,10 @@ def run(args):
             json.dump(prompts, open(prompt_save_file, 'w'))
 
 
-        ## tokenize
-        model = LlamaForCausalLM.from_pretrained(
-            llm_path,
-            torch_dtype=torch.float16,
-            device_map=device_map,
-        )
-        tokenizer = LlamaTokenizer.from_pretrained(llm_path)
-        tokenizer.pad_token_id = (
-            0  
-        )
-        tokenizer.padding_side = "left" 
-
+        ## Tokenize
+        tokenizer = AutoTokenizer.from_pretrained(llm_path)
+        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.padding_side = "right"
 
         data = load_dataset('json', data_files=prompt_save_file)
         partial_func = partial(generate_and_tokenize_prompt, prompter=prompter, tokenizer=tokenizer, length_limit=args.truncation_length, if_test=False)
@@ -167,11 +161,21 @@ def run(args):
 
         
         ## create peft model and trainer
-        if not ddp and torch.cuda.device_count() > 1:
-            # keeps Trainer from trying its own DataParallelism when more than 1 gpu is available
-            model.is_parallelizable = True
-            model.model_parallel = True
-        config = LoraConfig(
+        # if not ddp and torch.cuda.device_count() > 1:
+        #     # keeps Trainer from trying its own DataParallelism when more than 1 gpu is available
+        #     model.is_parallelizable = True
+        #     model.model_parallel = True
+
+        ## Prepare model
+        model = AutoModelForCausalLM.from_pretrained(
+            llm_path,
+            torch_dtype=torch.float16,
+            device_map=device_map,
+        )
+        ori_p = print_number_of_trainable_model_parameters(model)
+        if args.prepare_kbit:
+            model = prepare_model_for_kbit_training(model)
+        peft_config = LoraConfig(
             r=args.lora_rank,
             lora_alpha=args.lora_alpha,
             target_modules=args.lora_target_modules,
@@ -179,40 +183,58 @@ def run(args):
             bias='none',
             task_type='CAUSAL_LM'
         )
-        model = get_peft_model(model, config)
-        # prefix_added_lora_model = KoPAWithAdapter(model, num_prefix, kge_model=kge_model)
-        prefix_added_lora_model = KGEAdapterLLM(model, args.history_length + 2, (kge_ent_embs_path, kge_rel_embs_path))
-        # import pickle
-        # pickle.dump(train_data, open('temp.pkl', 'wb'))
-        trainer = Trainer(
-            model=prefix_added_lora_model,
-            train_dataset=train_data,
-            eval_dataset=val_data,
-            args=TrainingArguments(
-                per_device_train_batch_size=args.sm_batch_size,
-                gradient_accumulation_steps=gradient_accumulation_steps,
-                warmup_steps=100,
-                num_train_epochs=args.n_ft_epoch,
-                learning_rate=args.lr,
-                fp16=True,
-                logging_steps=10,
-                optim="adamw_hf",
-                evaluation_strategy="steps" if val_set_size > 0 else "no",
-                save_strategy="steps",
-                eval_steps=None,
-                save_steps=5000,
-                output_dir=args.log_dir,
-                save_total_limit=2,
-                load_best_model_at_end=True if val_set_size > 0 else False,
-                ddp_find_unused_parameters=False if ddp else None,
-                group_by_length=False,
-                report_to='wandb',
-                run_name='kge-llama-2-7b-ms-tkgc',
-            ),
-            data_collator=DataCollatorForSeq2Seq(
-                tokenizer, pad_to_multiple_of=8, return_tensors="pt", padding=True
-            ),
+        model = get_peft_model(model, peft_config)
+        peft_p = print_number_of_trainable_model_parameters(model)
+        logging.info(f'# Trainable parameter \nBefore: {ori_p}\nAfter: {peft_p} \nPercentage: {round(peft_p/ori_p * 100, 2)}')
+
+        if args.add_prefix:
+            logging.info("****Add prefix embedding****")
+            prefix_model = KGEAdapterLLM(model, args.history_length + 2, (kge_ent_embs_path, kge_rel_embs_path))
+        import pickle
+        pickle.dump(train_data, open('train_data.pkl', 'wb'))
+
+        training_args = TrainingArguments(
+            per_device_train_batch_size=args.sm_batch_size,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+            warmup_steps=500,
+            num_train_epochs=args.n_ft_epoch,
+            learning_rate=args.lr,
+            logging_dir=args.logging_dir,
+            fp16=True,
+            logging_steps=100,
+            optim="adamw_hf",
+            evaluation_strategy="steps" if val_set_size > 0 else "no",
+            save_strategy="steps",
+            eval_steps=None,
+            save_steps=2000,
+            output_dir=args.output_dir,
+            save_total_limit=2,
+            load_best_model_at_end=True if val_set_size > 0 else False,
+            ddp_find_unused_parameters=False if ddp else None,
+            group_by_length=False,
+            report_to='wandb',
+            run_name=args.run_name,
         )
+        if args.add_prefix:
+            trainer = Trainer(
+                model=prefix_model,
+                train_dataset=train_data,
+                eval_dataset=val_data,
+                args=training_args,
+                data_collator=DataCollatorForSeq2Seq(
+                    tokenizer, pad_to_multiple_of=8, return_tensors="pt", padding=True
+                ),
+            )
+        else:
+            trainer = Trainer(
+                model=model,
+                train_dataset=train_data,
+                eval_dataset=val_data,
+                args=training_args,
+                data_collator=DataCollatorForSeq2Seq(
+                    tokenizer, pad_to_multiple_of=8, return_tensors="pt", padding=True
+                ),
+            )
         model.config.use_cache = False
 
         old_state_dict = model.state_dict
@@ -229,7 +251,8 @@ def run(args):
         trainer.train(resume_from_checkpoint=None)
 
         model.save_pretrained(args.output_dir)
-        torch.save(prefix_added_lora_model.embeddings, os.path.join(args.output_dir, "embeddings.pth"))
+        if args.add_prefix:
+            torch.save(model.embeddings, os.path.join(args.output_dir, "embeddings.pth"))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='LLM for TKGC')
@@ -249,11 +272,13 @@ if __name__ == "__main__":
     parser.add_argument("--global-heads", type=int, default=4, help='heads of attention during RGAT')
     parser.add_argument("--global-layers", type=int, default=2, help='numbers of propagation')
     parser.add_argument("--n-global-epoch", type=int, default=200, help='KGE epochs')
+    parser.add_argument("--use-gnn", type=bool, default=False, help='whether use rgcn or some other gnn models during pretraining')
     parser.add_argument("--score-func", type=str, default='RotatE', help='KGE model for optimization')
     parser.add_argument("--kge-lr", type=str, default=1e-4, help='learning rate in KGE phase')
     parser.add_argument("--weight-decay", type=float, default=1e-6, help='weight decay for optimizer')
     parser.add_argument("--kge-batch-size", type=int, default=500, help='batch size in KGE')
     parser.add_argument("--grad-norm", type=float, default=1., help='grad norm during training')
+    parser.add_argument("--add-prefix", action='store_true', help='whether add prefix embedding')
     # Configure for phase
     parser.add_argument("--do-pretrain", action='store_true', help='whether pretrain KGE')
     parser.add_argument("--do-finetune", action='store_true', help='whether fine-tuning')
@@ -262,23 +287,25 @@ if __name__ == "__main__":
     parser.add_argument("--batch-size", type=int, default=8, help='fine-tuning batch size')
     parser.add_argument("--sm-batch-size", type=int, default=2, help='small batch size')
     parser.add_argument("--n-ft-epoch", type=int, default=2, help='fine-tuning epoch')
-    parser.add_argument("--lr", type=float, default=1e-4, help='learning rate during fine-tuning')
+    parser.add_argument("--prepare-kbit", action='store_true', help='whether prepare for kbit training')
+    parser.add_argument("--lr", type=float, default=2e-5, help='learning rate during fine-tuning')
     parser.add_argument("--truncation-length", type=int, default=768, help='truncation length limit')
     parser.add_argument("--train-on-inputs", type=bool, default=True, help='whether training on inputs data')
     parser.add_argument("--add-eos-tokens", type=bool, default=False, help='whether adding eos')
     parser.add_argument("--prompt-template", type=str, default='llama', help='prompt template')
     # Configure for lora
-    parser.add_argument("--lora-rank", type=int, default=16, help='lora rank')
+    parser.add_argument("--lora-rank", type=int, default=32, help='lora rank')
     parser.add_argument("--lora-alpha", type=int, default=16, help='lora alpha')
     parser.add_argument("--lora-dropout", type=float, default=0.05, help='dropout rate during ft')
     parser.add_argument("--lora-target-modules", type=List[str], default=['q_proj', 'k_proj', 'v_proj', 'o_proj'], help='lora target modules')
 
-    # Configure
+    # Configure for other places
     parser.add_argument("--history-length", type=int, default=8, help='history references')
     parser.add_argument("--val-size", type=int, default=0, help='vaild dataset length')
     parser.add_argument("--output-dir", type=str, default='./outputs', help='output dirs')
-    parser.add_argument("--log-dir", type=str, default='./logs', help='logs save dir')
+    parser.add_argument("--logging-dir", type=str, default='./logs', help='logs save dir')
     parser.add_argument("--add-reciprocal", type=bool, default=False, help='whether do reverse reasoning')
+    parser.add_argument("--run-name", type=str, default='llama-2-7b', help='tag for checking in wandb')
     args = parser.parse_args()
     
 

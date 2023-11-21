@@ -12,10 +12,14 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s: %(message)s',
 from torch import nn
 from transformers import get_linear_schedule_with_warmup
 from transformers import LlamaForCausalLM, LlamaTokenizer, Trainer, TrainingArguments, DataCollatorForSeq2Seq
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers.generation.utils import GenerationConfig
 
 from utils import generate_and_tokenize_prompt
 from load_data import DataLoader 
 from prompt import Prompter
+import warnings
+warnings.filterwarnings('ignore')
 
 from peft import (
     PeftModel,
@@ -30,16 +34,19 @@ from peft import (
 def inference(args):
     use_cuda = args.gpu >= 0 and torch.cuda.is_available()
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device_map = "auto"
+    
 
     base_model_path = os.path.join(args.base_model_path, args.base_model)
-    kg_embedding = torch.load(args.kge_path).to(device)
-    tokenizer = LlamaTokenizer.from_pretrained(base_model_path)
-    model = LlamaForCausalLM.from_pretrained(base_model_path,
-                                             torch_dtype=torch.float16).to(device)
+    # kg_embedding = torch.load(args.kge_path).to(device)
+    tokenizer = AutoTokenizer.from_pretrained(base_model_path)
+    model = AutoModelForCausalLM.from_pretrained(base_model_path,
+                                             torch_dtype=torch.float16, device_map=device_map).to(device)
     model = PeftModel.from_pretrained(model, args.lora_weights_path, torch_dtype=torch.float16).to(device)
-    model.config.pad_token_id = tokenizer.pad_token_id = 0  # unk
-    model.config.bos_token_id = 1
-    model.config.eos_token_id = 2
+    # model.config.pad_token_id = tokenizer.pad_token_id = 0  # unk
+    # model.config.bos_token_id = 1
+    # model.config.eos_token_id = 2
+    model.eval()
 
 
     # Prepare things such as prompts list for test data;
@@ -65,7 +72,7 @@ def inference(args):
             history_list = data_loader.search_history(h, r, args.history_length, 'right')
             if len(history_list) != args.history_length:
                 continue
-            prompt = prompter.prepare_prompt((h, r, ts), history_list, answer=t)
+            prompt = prompter.prepare_prompt((h, r, ts), history_list, response=t)
             prompts.append(prompt)
 
             if args.add_reciprocal:
@@ -78,28 +85,40 @@ def inference(args):
     # test_data = data["train"].shuffle().map(partial_func)
     result = []
     for test_sample in tqdm(prompts):
-        instructions, inputs, outputs, ids = test_sample['instruction'], test_sample['input'], test_sample['output'], test_sample['embedding_ids']
+        query, answer, ids = test_sample['query'], test_sample['response'], test_sample['embedding_ids']
         ids = torch.LongTensor(ids).reshape(1, -1).to(device)
-        prefix = kg_embedding(ids)
-        prompt = prompter.test_prompt(instructions, inputs)
+        # prefix = kg_embedding(ids)
+        prompt = prompter.generate_prompt(query)
         model_inputs = tokenizer(prompt, return_tensors="pt")
         input_ids = model_inputs.input_ids.to(device)
-        token_embeds = model.model.model.embed_tokens(input_ids)
-        ## float16 for Half-float inference
-        if args.half:
-            prefix = torch.tensor(prefix.clone(), dtype=torch.float16)
-        input_embeds = torch.cat((prefix, token_embeds), dim=1)
-        generate_ids = model.generate(
-            inputs_embeds=input_embeds, 
-            max_new_tokens=32
+        # token_embeds = model.model.model.embed_tokens(input_ids)
+        # ## float16 for Half-float inference
+        # if args.half:
+        #     prefix = torch.tensor(prefix.clone(), dtype=torch.float16)
+        # input_embeds = torch.cat((prefix, token_embeds), dim=1)
+        # attention_mask = torch.ones_like(input_embeds)
+        generation_config = GenerationConfig(
+            do_sample=True,
+            temperature=0.9,
+            # top_p=0.92,
+            # top_k=100,
+            num_beams=4, # beam search
+            # no_repeat_ngram_size=2
         )
-        context = tokenizer.batch_decode(input_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
-        response = tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
-        response = response.replace(context, "").strip()
+        generate_ids = model.generate(
+            input_ids=input_ids,
+            # inputs_embeds=input_embeds, 
+            generation_config=generation_config,
+            return_dict_in_generate=True,
+            max_new_tokens=100,
+        )
+
+        inputs_text = tokenizer.decode(input_ids[0])
+        output = tokenizer.decode(generate_ids.sequences[0]).replace(inputs_text, "")
         result.append(
             {
-                "answer": outputs,
-                "predict": response
+                "answer": answer,
+                "predict": output
             }
         )
     json.dump(result, open(os.path.join(args.output_dir, 'results.json'), 'w'))
@@ -114,7 +133,7 @@ if __name__ == "__main__":
     parser.add_argument("--save-path", type=str, default='./pretrained_emb', help='embedding save path')
     parser.add_argument("--template-path", type=str, default='./templates', help='prompt template path')
     parser.add_argument("--prompt-path", type=str, default='./prompts', help='prompt save path')
-    parser.add_argument("--base-model-path", type=str, default='./models', help='base llm')
+    parser.add_argument("--base-model-path", type=str, default='./models/modelscope', help='base llm')
     parser.add_argument("--base-model", type=str, default='Llama-2-7b-ms', help='base llm')
     parser.add_argument("--gpu", type=int, default=1, help='gpu id')
     parser.add_argument("--lora-weights-path", type=str, default='./outputs', help='lora save path')
