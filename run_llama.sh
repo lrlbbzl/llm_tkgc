@@ -1,4 +1,4 @@
-export CUDA_VISIBLE_DEVICES=5
+export CUDA_VISIBLE_DEVICES=7
 python main.py --dataset ICEWS14 \
     --n-global-epoch 50 \
     --hidden-size 500 \
@@ -7,8 +7,9 @@ python main.py --dataset ICEWS14 \
     --sm-batch-size 1 \
     --use-gnn False \
     --lora-rank 8 \
+    --lora-dropout 0.1 \
     --n-ft-epoch 2 \
     --base-model-path ./models/modelscope \
     --base-model Llama-2-7b-ms \
-    --run-name lr2e-5_rank8_adamwhf_nokbit \
-    --output-dir './outputs/float16_adamwhf_nokbit'
+    --run-name noend_lr2e-5_rank8_paged_nokbit \
+    --output-dir './outputs/noend_float16_paged_nokbit'

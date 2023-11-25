@@ -3,8 +3,7 @@ from modelscope import GenerationConfig
 
 MODELSCOPE_CAHCE='./models'
 
-# Note: The default behavior now has injection attack prevention off.
-model_dir = AutoModelForCausalLM.from_pretrained('qwen/Qwen-7B-Chat', device_map="auto", trust_remote_code=True, bf16=True).eval()
+model_dir = snapshot_download("ZhipuAI/chatglm3-6b", revision = "v1.0.0")
 # model.generation_config = GenerationConfig.from_pretrained(model_dir, trust_remote_code=True) # 可指定不同的生成长度、top_p等相关超参
 
 # tokenizer = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True)

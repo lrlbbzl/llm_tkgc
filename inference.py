@@ -38,14 +38,19 @@ def inference(args):
     
 
     base_model_path = os.path.join(args.base_model_path, args.base_model)
-    # kg_embedding = torch.load(args.kge_path).to(device)
+    if args.add_prefix:
+        kge_path = os.path.join(args.output_dir, 'embeddings.pth')
+        kg_embedding = torch.load(kge_path).to(device)
     tokenizer = AutoTokenizer.from_pretrained(base_model_path)
+    tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "right"
     model = AutoModelForCausalLM.from_pretrained(base_model_path,
                                              torch_dtype=torch.float16, device_map=device_map).to(device)
     model = PeftModel.from_pretrained(model, args.lora_weights_path, torch_dtype=torch.float16).to(device)
-    # model.config.pad_token_id = tokenizer.pad_token_id = 0  # unk
-    # model.config.bos_token_id = 1
-    # model.config.eos_token_id = 2
+    if args.add_prefix:
+        model.config.pad_token_id = tokenizer.pad_token_id = 0  # unk
+        model.config.bos_token_id = 1
+        model.config.eos_token_id = 2
     model.eval()
 
 
@@ -75,52 +80,60 @@ def inference(args):
             prompt = prompter.prepare_prompt((h, r, ts), history_list, response=t)
             prompts.append(prompt)
 
-            if args.add_reciprocal:
-                # TODO
-                pass
         json.dump(prompts, open(prompt_save_file, 'w'))
 
-    # data = load_dataset('json', data_files=prompt_save_file)
-    # partial_func = partial(generate_and_tokenize_prompt, prompter=prompter, tokenizer=tokenizer, length_limit=args.truncation_length, if_test=False)
-    # test_data = data["train"].shuffle().map(partial_func)
-    result = []
-    for test_sample in tqdm(prompts):
-        query, answer, ids = test_sample['query'], test_sample['response'], test_sample['embedding_ids']
-        ids = torch.LongTensor(ids).reshape(1, -1).to(device)
-        # prefix = kg_embedding(ids)
-        prompt = prompter.generate_prompt(query)
-        model_inputs = tokenizer(prompt, return_tensors="pt")
-        input_ids = model_inputs.input_ids.to(device)
-        # token_embeds = model.model.model.embed_tokens(input_ids)
-        # ## float16 for Half-float inference
-        # if args.half:
-        #     prefix = torch.tensor(prefix.clone(), dtype=torch.float16)
-        # input_embeds = torch.cat((prefix, token_embeds), dim=1)
-        # attention_mask = torch.ones_like(input_embeds)
-        generation_config = GenerationConfig(
-            do_sample=True,
-            temperature=0.9,
-            # top_p=0.92,
-            # top_k=100,
-            num_beams=4, # beam search
-            # no_repeat_ngram_size=2
-        )
-        generate_ids = model.generate(
-            input_ids=input_ids,
-            # inputs_embeds=input_embeds, 
-            generation_config=generation_config,
-            return_dict_in_generate=True,
-            max_new_tokens=100,
-        )
 
-        inputs_text = tokenizer.decode(input_ids[0])
-        output = tokenizer.decode(generate_ids.sequences[0]).replace(inputs_text, "")
-        result.append(
-            {
-                "answer": answer,
-                "predict": output
-            }
-        )
+    generation_config = GenerationConfig(
+        do_sample=True,
+        temperature=0.9,
+        # top_p=0.92,
+        # top_k=100,
+        num_beams=4, # beam search
+        # no_repeat_ngram_size=2
+    )
+    result = []
+    with torch.no_grad():
+        for test_sample in tqdm(prompts):
+            query, answer, ids = test_sample['query'], test_sample['response'], test_sample['embedding_ids']
+            ids = torch.LongTensor(ids).reshape(1, -1).to(device)
+            prompt = prompter.generate_prompt(query)
+            model_inputs = tokenizer(prompt, return_tensors="pt")
+            input_ids = model_inputs.input_ids.to(device)
+
+            if args.add_prefix:
+                prefix = kg_embedding(ids)
+                token_embeds = model.model.model.embed_tokens(input_ids)
+                ## float16 for Half-float inference
+                if args.half:
+                    prefix = torch.tensor(prefix.clone(), dtype=torch.float16)
+                input_embeds = torch.cat((prefix, token_embeds), dim=1)
+                attention_mask = torch.ones_like(input_embeds)
+                generate_ids = model.generate(
+                    input_ids=None,
+                    inputs_embeds=input_embeds,
+                    return_dict_in_generate=True, 
+                    max_new_tokens=100,
+                )
+            else:
+                generate_ids = model.generate(
+                    input_ids=input_ids,
+                    generation_config=generation_config,
+                    return_dict_in_generate=True,
+                    max_new_tokens=100,
+                )
+
+            inputs_text = tokenizer.decode(input_ids[0])
+            output = tokenizer.decode(generate_ids.sequences[0]).replace(inputs_text, "")
+            # print('*' * 20)
+            # print(output)
+            # print('-' * 20)
+            # print(answer)
+            result.append(
+                {
+                    "answer": answer,
+                    "predict": output
+                }
+            )
     json.dump(result, open(os.path.join(args.output_dir, 'results.json'), 'w'))
 
 
@@ -137,8 +150,8 @@ if __name__ == "__main__":
     parser.add_argument("--base-model", type=str, default='Llama-2-7b-ms', help='base llm')
     parser.add_argument("--gpu", type=int, default=1, help='gpu id')
     parser.add_argument("--lora-weights-path", type=str, default='./outputs', help='lora save path')
-    parser.add_argument("--kge-path", type=str, default='./outputs/embeddings.pth', help='kge save path')
     parser.add_argument("--half", type=bool, default=False, help='half precision')
+    parser.add_argument("--add-prefix", action='store_true', help='whether use kge prefix')
 
     parser.add_argument("--history-length", type=int, default=8, help='history references')
     parser.add_argument("--output-dir", type=str, default='./outputs', help='output dirs')

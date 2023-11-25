@@ -154,9 +154,48 @@ def run(args):
         tokenizer.pad_token = tokenizer.eos_token
         tokenizer.padding_side = "right"
 
+        def tokenize(prompt, tokenizer, length_limit, add_eos_token=False):
+            # there's probably a way to do this with the tokenizer settings
+            # but again, gotta move fast
+            result = tokenizer(
+                prompt,
+                truncation=True,
+                max_length=length_limit,
+                padding=False,
+                return_tensors=None,
+            )
+            # if (
+            #     result["input_ids"][-1] != tokenizer.eos_token_id
+            #     and len(result["input_ids"]) < length_limit
+            #     and add_eos_token
+            # ):
+            #     result["input_ids"].append(tokenizer.eos_token_id)
+            #     result["attention_mask"].append(1)
+
+            result["labels"] = result["input_ids"].copy()
+
+            return result
+
+        def generate_and_tokenize_prompt(data_point):
+            full_prompt = prompter.generate_prompt(
+                data_point["query"],
+                data_point["response"],
+            )
+
+            full_tokenized = tokenize(full_prompt, tokenizer, args.truncation_length, add_eos_token=True)
+            user_prompt = prompter.generate_prompt(
+                data_point["query"]
+            )
+            user_tokenized = tokenize(user_prompt, tokenizer, args.truncation_length)
+            user_length = len(user_tokenized["input_ids"])
+            mask_token = [-100] * user_length
+            full_tokenized["labels"] = mask_token + full_tokenized["labels"][user_length : ]
+            return full_tokenized
+
         data = load_dataset('json', data_files=prompt_save_file)
-        partial_func = partial(generate_and_tokenize_prompt, prompter=prompter, tokenizer=tokenizer, length_limit=args.truncation_length, if_test=False)
-        train_data = data["train"].shuffle().map(partial_func)
+        # partial_func = partial(generate_and_tokenize_prompt, prompter=prompter, tokenizer=tokenizer, length_limit=args.truncation_length, if_test=False)
+        # train_data = data["train"].shuffle().map(partial_func)
+        train_data = data["train"].map(generate_and_tokenize_prompt)
         val_data = None
 
         
@@ -190,8 +229,6 @@ def run(args):
         if args.add_prefix:
             logging.info("****Add prefix embedding****")
             prefix_model = KGEAdapterLLM(model, args.history_length + 2, (kge_ent_embs_path, kge_rel_embs_path))
-        import pickle
-        pickle.dump(train_data, open('train_data.pkl', 'wb'))
 
         training_args = TrainingArguments(
             per_device_train_batch_size=args.sm_batch_size,
@@ -199,22 +236,20 @@ def run(args):
             warmup_steps=500,
             num_train_epochs=args.n_ft_epoch,
             learning_rate=args.lr,
-            logging_dir=args.logging_dir,
             fp16=True,
             logging_steps=100,
-            optim="adamw_hf",
-            evaluation_strategy="steps" if val_set_size > 0 else "no",
+            optim="paged_adamw_32bit",
             save_strategy="steps",
             eval_steps=None,
-            save_steps=2000,
+            save_steps=5000,
             output_dir=args.output_dir,
             save_total_limit=2,
-            load_best_model_at_end=True if val_set_size > 0 else False,
             ddp_find_unused_parameters=False if ddp else None,
             group_by_length=False,
             report_to='wandb',
             run_name=args.run_name,
         )
+
         if args.add_prefix:
             trainer = Trainer(
                 model=prefix_model,
@@ -237,22 +272,22 @@ def run(args):
             )
         model.config.use_cache = False
 
-        old_state_dict = model.state_dict
-        model.state_dict = (
-            lambda self, *_, **__: get_peft_model_state_dict(
-                self, old_state_dict()
-            )
-        ).__get__(model, type(model))
+        # old_state_dict = model.state_dict
+        # model.state_dict = (
+        #     lambda self, *_, **__: get_peft_model_state_dict(
+        #         self, old_state_dict()
+        #     )
+        # ).__get__(model, type(model))
 
-        import sys
-        if torch.__version__ >= "2" and sys.platform != "win32":
-            model = torch.compile(model)
+        # import sys
+        # if torch.__version__ >= "2" and sys.platform != "win32":
+        #     model = torch.compile(model)
 
-        trainer.train(resume_from_checkpoint=None)
+        trainer.train()
 
         model.save_pretrained(args.output_dir)
         if args.add_prefix:
-            torch.save(model.embeddings, os.path.join(args.output_dir, "embeddings.pth"))
+            torch.save(prefix_model.embeddings, os.path.join(args.output_dir, "embeddings.pth"))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='LLM for TKGC')

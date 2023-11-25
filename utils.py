@@ -138,7 +138,6 @@ def tokenize(prompt, tokenizer, length_limit, add_eos_token=False):
 
     return result
 
-
 def generate_and_tokenize_prompt(data_point, prompter, tokenizer, length_limit, if_test: bool):
     full_prompt = prompter.generate_prompt(
         data_point["query"],
