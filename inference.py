@@ -124,10 +124,11 @@ def inference(args):
 
             inputs_text = tokenizer.decode(input_ids[0])
             output = tokenizer.decode(generate_ids.sequences[0]).replace(inputs_text, "")
-            # print('*' * 20)
-            # print(output)
-            # print('-' * 20)
-            # print(answer)
+            if args.check_example:
+                print('*' * 20)
+                print(output)
+                print('-' * 20)
+                print(answer)
             result.append(
                 {
                     "answer": answer,
@@ -136,6 +137,10 @@ def inference(args):
             )
     json.dump(result, open(os.path.join(args.output_dir, 'results.json'), 'w'))
 
+
+def check_args(args):
+    if not args.dataset in ['ICEWS14', 'YAGO', 'WIKI', 'ICEWS18']:
+        raise Exception("Invalid dataset name.")
 
 
 if __name__ == "__main__":
@@ -156,6 +161,7 @@ if __name__ == "__main__":
     parser.add_argument("--history-length", type=int, default=8, help='history references')
     parser.add_argument("--output-dir", type=str, default='./outputs', help='output dirs')
     parser.add_argument("--add-reciprocal", type=bool, default=False, help='whether do reverse reasoning')
-    
+    parser.add_argument("--check-example", action='store_true', help='whether print the example to check')
     args = parser.parse_args()
+    check_args(args)
     inference(args)

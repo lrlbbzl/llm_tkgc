@@ -16,6 +16,7 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s: %(message)s',
 import pickle
 import os 
 import json
+import sys
 from typing import List, Tuple
 from datasets import load_dataset
 
@@ -57,11 +58,15 @@ def run(args):
     g = g.to(device)
     train_data.to(device)
 
-    use_gnn = 'none'
-    kge_ent_embs_path = os.path.join(args.save_path, 'entity_emb_{}_{}.pkl'.format(args.score_func, use_gnn))
-    kge_rel_embs_path = os.path.join(args.save_path, 'relation_emb_{}_{}.pkl'.format(args.score_func, use_gnn))
-    if not os.path.exists(args.output_dir):
-        os.makedirs(args.output_dir)
+    use_gnn = 'gcn'
+    if args.gcn == False:
+        use_gnn = 'none'
+    logging.info("Use gcn: {}".format(use_gnn))
+    kge_dir = os.path.join(args.save_path, args.dataset)
+    if not os.path.exists(kge_dir):
+        os.makedirs(kge_dir)
+    kge_ent_embs_path = os.path.join(kge_dir, 'entity_emb_{}_{}.pkl'.format(args.score_func, use_gnn))
+    kge_rel_embs_path = os.path.join(kge_dir, 'relation_emb_{}_{}.pkl'.format(args.score_func, use_gnn))
     
     if args.do_pretrain:
         logging.info('*' * 20 + 'Start pretraining' + '*' * 20)
@@ -79,7 +84,7 @@ def run(args):
             samples = samples[torch.randperm(samples.shape[0]), :]
             iters = int(length // args.kge_batch_size) + 1 if length % args.kge_batch_size != 0 else length // args.kge_batch_size
             for step in tqdm(range(iters)):
-                new_feature = global_model.gnn_forward(args.use_gnn)
+                new_feature = global_model.gnn_forward(args.gcn)
                 batch_data = samples[args.kge_batch_size * step : min(length, args.kge_batch_size * (step + 1))]
                 score = global_model(batch_data, new_feature)
                 loss = loss_fn(score, batch_data[:, 2])
@@ -106,6 +111,8 @@ def run(args):
 
     if args.do_finetune:
         logging.info('*' * 20 + 'Start fine-tuning' + '*' * 20)
+        if not os.path.exists(args.output_dir):
+            os.makedirs(args.output_dir)
 
         llm_path = os.path.join(args.base_model_path, args.base_model)
         gradient_accumulation_steps = args.batch_size // args.sm_batch_size
@@ -127,7 +134,10 @@ def run(args):
         test_samples = data_loader.load_test_quadruples()
         val_set_size = args.val_size
         ### dump prompt 
-        prompt_save_file = os.path.join(args.prompt_path, args.dataset, args.base_model + '.json')
+        prompt_save_dir = os.path.join(args.prompt_path, args.dataset)
+        if not os.path.exists(prompt_save_dir):
+            os.makedirs(prompt_save_dir)
+        prompt_save_file = os.path.join(prompt_save_dir, args.base_model + '.json')
 
         template_path = os.path.join(args.template_path, args.base_model + '.json')
         prompter = Prompter(template_path, id2ent, id2rel)
@@ -289,6 +299,10 @@ def run(args):
         if args.add_prefix:
             torch.save(prefix_model.embeddings, os.path.join(args.output_dir, "embeddings.pth"))
 
+def check_args(args):
+    if args.dataset not in ['ICEWS14', 'ICEWS18', 'YAGO', 'WIKI']:
+        raise Exception("Invalid dataset name.")
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='LLM for TKGC')
 
@@ -305,9 +319,9 @@ if __name__ == "__main__":
     parser.add_argument("--hidden-size", type=int, default=200, help='hidden size for KGE')
     parser.add_argument("--global-gnn", type=str, default='rgat', help='type of gnn in global graph')
     parser.add_argument("--global-heads", type=int, default=4, help='heads of attention during RGAT')
-    parser.add_argument("--global-layers", type=int, default=2, help='numbers of propagation')
+    parser.add_argument("--global-layers", type=int, default=1, help='numbers of propagation')
     parser.add_argument("--n-global-epoch", type=int, default=200, help='KGE epochs')
-    parser.add_argument("--use-gnn", type=bool, default=False, help='whether use rgcn or some other gnn models during pretraining')
+    parser.add_argument("--gcn", action='store_true', help='whether use rgcn or some other gnn models during pretraining')
     parser.add_argument("--score-func", type=str, default='RotatE', help='KGE model for optimization')
     parser.add_argument("--kge-lr", type=str, default=1e-4, help='learning rate in KGE phase')
     parser.add_argument("--weight-decay", type=float, default=1e-6, help='weight decay for optimizer')
@@ -342,7 +356,8 @@ if __name__ == "__main__":
     parser.add_argument("--add-reciprocal", type=bool, default=False, help='whether do reverse reasoning')
     parser.add_argument("--run-name", type=str, default='llama-2-7b', help='tag for checking in wandb')
     args = parser.parse_args()
-    
+
+    check_args(args)
 
     # start
     run(args)
