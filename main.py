@@ -137,8 +137,7 @@ def run(args):
         prompt_save_dir = os.path.join(args.prompt_path, args.dataset)
         if not os.path.exists(prompt_save_dir):
             os.makedirs(prompt_save_dir)
-        prompt_save_file = os.path.join(prompt_save_dir, args.base_model + '.json')
-
+        prompt_save_file = os.path.join(prompt_save_dir, '{}_{}.json'.format(args.base_model, args.history_length))
         template_path = os.path.join(args.template_path, args.base_model + '.json')
         prompter = Prompter(template_path, id2ent, id2rel)
         if os.path.exists(prompt_save_file):
@@ -338,7 +337,7 @@ if __name__ == "__main__":
     parser.add_argument("--n-ft-epoch", type=int, default=2, help='fine-tuning epoch')
     parser.add_argument("--prepare-kbit", action='store_true', help='whether prepare for kbit training')
     parser.add_argument("--lr", type=float, default=2e-5, help='learning rate during fine-tuning')
-    parser.add_argument("--truncation-length", type=int, default=768, help='truncation length limit')
+    parser.add_argument("--truncation-length", type=int, default=1024, help='truncation length limit')
     parser.add_argument("--train-on-inputs", type=bool, default=True, help='whether training on inputs data')
     parser.add_argument("--add-eos-tokens", type=bool, default=False, help='whether adding eos')
     parser.add_argument("--prompt-template", type=str, default='llama', help='prompt template')

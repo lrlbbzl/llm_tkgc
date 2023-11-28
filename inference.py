@@ -14,10 +14,12 @@ from transformers import get_linear_schedule_with_warmup
 from transformers import LlamaForCausalLM, LlamaTokenizer, Trainer, TrainingArguments, DataCollatorForSeq2Seq
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.generation.utils import GenerationConfig
+from tensor_parallel import TensorParallelPreTrainedModel
 
 from utils import generate_and_tokenize_prompt
 from load_data import DataLoader 
 from prompt import Prompter
+from accelerate import init_empty_weights,infer_auto_device_map,load_checkpoint_in_model,dispatch_model
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -36,7 +38,6 @@ def inference(args):
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     device_map = "auto"
     
-
     base_model_path = os.path.join(args.base_model_path, args.base_model)
     if args.add_prefix:
         kge_path = os.path.join(args.output_dir, 'embeddings.pth')
@@ -44,9 +45,12 @@ def inference(args):
     tokenizer = AutoTokenizer.from_pretrained(base_model_path)
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "right"
+
     model = AutoModelForCausalLM.from_pretrained(base_model_path,
-                                             torch_dtype=torch.float16, device_map=device_map).to(device)
-    model = PeftModel.from_pretrained(model, args.lora_weights_path, torch_dtype=torch.float16).to(device)
+                                             torch_dtype=torch.float16, device_map=device_map)
+    model = PeftModel.from_pretrained(model, args.lora_weights_path, torch_dtype=torch.float16)
+
+
     if args.add_prefix:
         model.config.pad_token_id = tokenizer.pad_token_id = 0  # unk
         model.config.bos_token_id = 1
@@ -64,7 +68,7 @@ def inference(args):
     test_samples = data_loader.load_test_quadruples()
     val_set_size = 0
     ### dump prompt 
-    prompt_save_file = os.path.join(args.prompt_path, args.dataset, args.base_model + '_test.json')
+    prompt_save_file = os.path.join(args.prompt_path, args.dataset, "{}_{}_test.json".format(args.base_model, args.history_length))
     template_path = os.path.join(args.template_path, args.base_model + '.json')
 
     prompter = Prompter(template_path, id2ent, id2rel)

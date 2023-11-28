@@ -1,6 +1,7 @@
-export CUDA_VISIBLE_DEVICES=5
-python inference.py --dataset ICEWS14 \
+export CUDA_VISIBLE_DEVICES=6,7
+python inference.py --dataset YAGO \
     --half True \
-    --add-prefix \
-    --output-dir './outputs/ICEWS14/llama_gcn_prefix_float16_paged_nokbit' \
-    --lora-weights-path './outputs/ICEWS14/llama_gcn_prefix_float16_paged_nokbit'
+    --history-length 30 \
+    --check-example \
+    --output-dir './outputs/YAGO/llama_len30_paged' \
+    --lora-weights-path './outputs/YAGO/llama_len30_paged'
