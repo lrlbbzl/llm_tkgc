@@ -100,12 +100,13 @@ def run(args):
 
         pickle.dump(global_model.ent_embedding, open(kge_ent_embs_path, 'wb'))
         pickle.dump(global_model.rel_embedding, open(kge_rel_embs_path, 'wb'))
+    # temporarily ignore the graph embedding
 
-    else:
-        if os.path.exists(kge_ent_embs_path) and os.path.exists(kge_rel_embs_path):
-            pass
-        else:
-            raise Exception("KGE files {} do not exist!".format(kge_ent_embs_path))
+    # else:
+    #     if args.add_prefix and os.path.exists(kge_ent_embs_path) and os.path.exists(kge_rel_embs_path):
+    #         pass
+    #     else:
+    #         raise Exception("KGE files {} do not exist!".format(kge_ent_embs_path))
 
 
 
@@ -307,7 +308,7 @@ def run(args):
             torch.save(prefix_model.embeddings, os.path.join(args.output_dir, "embeddings.pth"))
 
 def check_args(args):
-    if args.dataset not in ['ICEWS14', 'ICEWS18', 'YAGO', 'WIKI']:
+    if args.dataset not in ['ICEWS14', 'ICEWS18', 'ICEWS05-15', 'YAGO', 'WIKI']:
         raise Exception("Invalid dataset name.")
 
 if __name__ == "__main__":

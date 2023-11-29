@@ -123,14 +123,14 @@ def inference(args):
                     input_ids=None,
                     inputs_embeds=input_embeds,
                     return_dict_in_generate=True, 
-                    max_new_tokens=100,
+                    max_new_tokens=50,
                 )
             else:
                 generate_ids = model.generate(
                     input_ids=input_ids,
                     generation_config=generation_config,
                     return_dict_in_generate=True,
-                    max_new_tokens=100,
+                    max_new_tokens=50,
                 )
 
             inputs_text = tokenizer.decode(input_ids[0])
