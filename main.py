@@ -144,8 +144,16 @@ def run(args):
             prompts = json.load(open(prompt_save_file, 'r'))
         else:
             prompts = []
+            timeflow, timestamp_history = test_samples[0][3], [] # start time in test period
             for sample in tqdm(test_samples):
                 h, r, t, ts = sample
+                if ts != timeflow:
+                    ### timestamp change, updating history list
+                    timeflow = ts
+                    data_loader.update_history(timestamp_history)
+                    timestamp_history = []
+
+                timestamp_history.append(sample)
                 history_list = data_loader.search_history(h, r, args.history_length, 'right')
                 if len(history_list) != args.history_length:
                     continue
@@ -337,7 +345,7 @@ if __name__ == "__main__":
     parser.add_argument("--n-ft-epoch", type=int, default=2, help='fine-tuning epoch')
     parser.add_argument("--prepare-kbit", action='store_true', help='whether prepare for kbit training')
     parser.add_argument("--lr", type=float, default=2e-5, help='learning rate during fine-tuning')
-    parser.add_argument("--truncation-length", type=int, default=1024, help='truncation length limit')
+    parser.add_argument("--truncation-length", type=int, default=1500, help='truncation length limit')
     parser.add_argument("--train-on-inputs", type=bool, default=True, help='whether training on inputs data')
     parser.add_argument("--add-eos-tokens", type=bool, default=False, help='whether adding eos')
     parser.add_argument("--prompt-template", type=str, default='llama', help='prompt template')

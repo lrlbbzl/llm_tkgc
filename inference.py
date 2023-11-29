@@ -76,8 +76,15 @@ def inference(args):
         prompts = json.load(open(prompt_save_file, 'r'))
     else:
         prompts = []
+        timeflow, timestamp_history = test_samples[0][3], []
         for sample in tqdm(test_samples):
             h, r, t, ts = sample
+            if ts != timeflow:
+                ### timestamp change, updating history list
+                timeflow = ts
+                data_loader.update_history(timestamp_history)
+                timestamp_history = []
+            timestamp_history.append(sample)
             history_list = data_loader.search_history(h, r, args.history_length, 'right')
             if len(history_list) != args.history_length:
                 continue

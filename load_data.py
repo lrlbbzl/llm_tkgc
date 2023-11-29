@@ -88,7 +88,7 @@ class DataLoader(object):
 
 
     def generate_history(self, ):
-        self.entity_dic= self.load_id_dic(os.path.join(self.dataset, 'entity2id.txt'))
+        self.entity_dic = self.load_id_dic(os.path.join(self.dataset, 'entity2id.txt'))
         self.relation_dic = self.load_id_dic(os.path.join(self.dataset, 'relation2id.txt'))
 
         self.head_search = self.load_quadruples(self.history_data_paths, 'right')
@@ -97,8 +97,22 @@ class DataLoader(object):
         # self.test_data = self.load_test_quadruples('test.txt')
         
         return None
+
+    def update_history(self, timestamp_history):
+        ## Maybe delete tail search... it seems not to be used
+        for data in timestamp_history:
+            h, r, t, ts = data
+            if h not in self.head_search:
+                self.head_search.update({h : dict()})
+            if ts not in self.head_search[h]:
+                self.head_search[h].update({ts : dict()})
+            if r not in self.head_search[h][ts]:
+                self.head_search[h][ts].update({r : []})
+            self.head_search[h][ts][r].append(t)
+        return None
     
     def search_history(self, ent, rel, history_length, direction='right'):
+        ## search_dict[ent][time][rel]: list[ent]
         assert direction in ['right', 'left']
         search_dict = self.head_search if direction == 'right' else self.tail_search
         if ent not in search_dict:
@@ -110,7 +124,7 @@ class DataLoader(object):
         for k, v in schema_search_history.items():
             for tail in v[rel]:
                 tot.append((ent, rel, tail, k))
-        tot = sorted(tot, key=lambda x : x[0])
+        tot = sorted(tot, key=lambda x : x[3])
         if len(tot) >= history_length:
             return tot[ -history_length : ]
         leng = len(tot)

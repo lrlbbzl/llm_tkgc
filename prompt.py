@@ -59,10 +59,14 @@ class Prompter(object):
         return res1 + res2
     
     def generate_prompt(self, input, label=None):
-        schema1 = r"\{query\}"
-        res = re.sub(schema1, input, self.query_template)
+        # schema1 = r"\{query\}"
+        # res = re.sub(schema1, input, self.query_template)
+        # if label is not None:
+        #     schema2 = r"\{response\}"
+        #     label = re.sub(schema2, label, self.response_template)
+        #     res = f"{res}{label}"
+        res = self.query_template.replace("{query}", input)
         if label is not None:
-            schema2 = r"\{response\}"
-            label = re.sub(schema2, label, self.response_template)
+            label = self.response_template.replace("{response}", label)
             res = f"{res}{label}"
         return res

@@ -1,4 +1,4 @@
-export CUDA_VISIBLE_DEVICES=6,7
+export CUDA_VISIBLE_DEVICES=2,3
 python main.py --dataset YAGO \
     --n-global-epoch 200 \
     --hidden-size 500 \

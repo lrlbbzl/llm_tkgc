@@ -1,7 +1,7 @@
 import json
 import os
-dir_path = "./outputs"
-path = os.path.join(dir_path, 'noend_prefix_float16_adamwhf_nokbit',  'results.json')
+dir_path = "./outputs/ICEWS14"
+path = os.path.join(dir_path, 'llama_prefix_len10_paged', 'results.json')
 
 x = json.load(open(path, 'r'))
 
@@ -19,25 +19,17 @@ def eq(a, b):
     return index_a == len(a)
 
 acc = 0
-for a in x:
+for idx, a in enumerate(x):
     prediction, answer = a['predict'], a['answer']
     prediction = prediction[: prediction.find('.')]
     if answer in prediction:
         acc += 1
-    else:
-        sentence = "The missing entity of query quadruplet is "
-        substr = prediction[prediction.find(sentence) :]
-        prediction = substr[len(sentence) : substr.find('.')]
-        if prediction in answer:
-            # print("----")
-            # print(predict)
-            # print('****')
-            # print(ans)
-            acc += 1
-        # else:
-        #     (s, l) = (predict, ans) if len(predict) <= len(ans) else ans, predict
-        #     if eq(s, l):
-        #         acc += 1
+    # else:
+    #     sentence = "The missing entity of query quadruplet is "
+    #     substr = prediction[prediction.find(sentence) :]
+    #     prediction = substr[len(sentence) : ]
+    #     if prediction in answer:
+    #         acc += 1
                 
 
 print(acc * 1. / len(x))
