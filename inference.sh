@@ -1,6 +1,7 @@
 export CUDA_VISIBLE_DEVICES=5
-python inference.py --dataset ICEWS05-15 \
-    --half True \
+python inference.py --dataset ICEWS14 \
     --history-length 10 \
-    --output-dir './outputs/ICEWS18/llama_len10_paged' \
-    --lora-weights-path './outputs/ICEWS18/llama_len10_paged'
+    --inference-direction 'left' \
+    --data-augment \
+    --output-dir './outputs/ICEWS14/llama_len10_bi_aug' \
+    --lora-weights-path './outputs/ICEWS14/llama_len10_bi_aug'

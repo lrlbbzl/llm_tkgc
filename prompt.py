@@ -24,13 +24,11 @@ class Prompter(object):
         """
         history_list = sorted(history_list, key=lambda x : x[3])
         given_history = "History:\n" 
-        embedding_ids = [self.ent2id[query[0]], self.rel2id[query[1]], ]
 
         for history in history_list:
             h, r, t = history[0], history[1], history[2]
             single = "{}: [{}, {}, {}]\n".format(history[3], h, r, t)
             given_history += single
-            embedding_ids.append(self.ent2id[history[2]])
 
         q = "\nQuery:\n{}: [{}, {}, ]\n".format(query[2], query[0], query[1])
         response = response if response is not None else None
@@ -38,7 +36,6 @@ class Prompter(object):
         return {
             'query' : given_history + q,
             'response' : response,
-            'embedding_ids' : embedding_ids
         }
     
     def full_prompt(self, query, response):

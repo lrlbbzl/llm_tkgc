@@ -39,6 +39,8 @@ def inference(args):
     device_map = "auto"
     
     base_model_path = os.path.join(args.base_model_path, args.base_model)
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
     if args.add_prefix:
         kge_path = os.path.join(args.output_dir, 'embeddings.pth')
         kg_embedding = torch.load(kge_path).to(device)
@@ -65,10 +67,11 @@ def inference(args):
     data_loader.generate_history()
     id2ent, id2rel = data_loader.entity_dic, data_loader.relation_dic
     ### valid data in fine-tune and test data in inference
-    test_samples = data_loader.load_test_quadruples()
+    test_samples = data_loader.load_test_quadruples(args.inference_direction)
+    aug = "aug" if args.data_augment else "noaug"
     val_set_size = 0
     ### dump prompt 
-    prompt_save_file = os.path.join(args.prompt_path, args.dataset, "{}_{}_test.json".format(args.base_model, args.history_length))
+    prompt_save_file = os.path.join(args.prompt_path, args.dataset, "{}_{}_{}_{}_test.json".format(args.base_model, args.history_length, args.inference_direction, aug))
     template_path = os.path.join(args.template_path, args.base_model + '.json')
 
     prompter = Prompter(template_path, id2ent, id2rel)
@@ -76,18 +79,16 @@ def inference(args):
         prompts = json.load(open(prompt_save_file, 'r'))
     else:
         prompts = []
-        timeflow, timestamp_history = test_samples[0][3], []
-        for sample in tqdm(test_samples):
+        timeflow, timestamp_history = test_samples[0][0][3], []
+        for sample, direction in tqdm(test_samples):
             h, r, t, ts = sample
             if ts != timeflow:
                 ### timestamp change, updating history list
                 timeflow = ts
                 data_loader.update_history(timestamp_history)
                 timestamp_history = []
-            timestamp_history.append(sample)
-            history_list = data_loader.search_history(h, r, args.history_length, 'right')
-            if len(history_list) != args.history_length:
-                continue
+            timestamp_history.append((sample, direction))
+            history_list = data_loader.search_history(h, r, args.history_length, direction)
             prompt = prompter.prepare_prompt((h, r, ts), history_list, response=t)
             prompts.append(prompt)
 
@@ -105,33 +106,18 @@ def inference(args):
     result = []
     with torch.no_grad():
         for test_sample in tqdm(prompts):
-            query, answer, ids = test_sample['query'], test_sample['response'], test_sample['embedding_ids']
-            ids = torch.LongTensor(ids).reshape(1, -1).to(device)
+            query, answer = test_sample['query'], test_sample['response']
             prompt = prompter.generate_prompt(query)
             model_inputs = tokenizer(prompt, return_tensors="pt")
             input_ids = model_inputs.input_ids.to(device)
 
-            if args.add_prefix:
-                prefix = kg_embedding(ids)
-                token_embeds = model.model.model.embed_tokens(input_ids)
-                ## float16 for Half-float inference
-                if args.half:
-                    prefix = torch.tensor(prefix.clone(), dtype=torch.float16)
-                input_embeds = torch.cat((prefix, token_embeds), dim=1)
-                attention_mask = torch.ones_like(input_embeds)
-                generate_ids = model.generate(
-                    input_ids=None,
-                    inputs_embeds=input_embeds,
-                    return_dict_in_generate=True, 
-                    max_new_tokens=50,
-                )
-            else:
-                generate_ids = model.generate(
-                    input_ids=input_ids,
-                    generation_config=generation_config,
-                    return_dict_in_generate=True,
-                    max_new_tokens=50,
-                )
+            generate_ids = model.generate(
+                input_ids=input_ids,
+                return_dict_in_generate=True,
+                max_new_tokens=50,
+                # output_scores=True,
+                # renormalize_logits=True,
+            )
 
             inputs_text = tokenizer.decode(input_ids[0])
             output = tokenizer.decode(generate_ids.sequences[0]).replace(inputs_text, "")
@@ -146,19 +132,15 @@ def inference(args):
                     "predict": output
                 }
             )
-    json.dump(result, open(os.path.join(args.output_dir, 'results.json'), 'w'))
+    json.dump(result, open(os.path.join(args.output_dir, 'results_{}.json'.format(args.inference_direction)), 'w'))
 
-
-def check_args(args):
-    if not args.dataset in ['ICEWS14', 'YAGO', 'WIKI', 'ICEWS18']:
-        raise Exception("Invalid dataset name.")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='TKGC inference')
     
     parser.add_argument('--data-path', type=str, default='./data', help='data path')
-    parser.add_argument("--dataset", type=str, default='ICEWS14', help='select dataset')
+    parser.add_argument("--dataset", type=str, choices=['ICEWS14', 'YAGO', 'WIKI', 'ICEWS18', 'ICEWS05-15'], default='ICEWS14', help='select dataset')
     parser.add_argument("--save-path", type=str, default='./pretrained_emb', help='embedding save path')
     parser.add_argument("--template-path", type=str, default='./templates', help='prompt template path')
     parser.add_argument("--prompt-path", type=str, default='./prompts', help='prompt save path')
@@ -168,11 +150,12 @@ if __name__ == "__main__":
     parser.add_argument("--lora-weights-path", type=str, default='./outputs', help='lora save path')
     parser.add_argument("--half", type=bool, default=False, help='half precision')
     parser.add_argument("--add-prefix", action='store_true', help='whether use kge prefix')
+    parser.add_argument("--inference-direction", type=str, default='right', choices=['right', 'left', 'bi'])
+    parser.add_argument("--data-augment", action='store_true',)
 
     parser.add_argument("--history-length", type=int, default=8, help='history references')
     parser.add_argument("--output-dir", type=str, default='./outputs', help='output dirs')
     parser.add_argument("--add-reciprocal", type=bool, default=False, help='whether do reverse reasoning')
     parser.add_argument("--check-example", action='store_true', help='whether print the example to check')
     args = parser.parse_args()
-    check_args(args)
     inference(args)

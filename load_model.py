@@ -1,9 +1,8 @@
 from modelscope import AutoModelForCausalLM, AutoTokenizer, snapshot_download
 from modelscope import GenerationConfig
 
-MODELSCOPE_CAHCE='./models'
 
-model_dir = snapshot_download("ZhipuAI/chatglm3-6b", revision = "v1.0.0")
+model_dir = snapshot_download("modelscope/Llama-2-7b-ms", revision = "v1.0.0")
 # model.generation_config = GenerationConfig.from_pretrained(model_dir, trust_remote_code=True) # 可指定不同的生成长度、top_p等相关超参
 
 # tokenizer = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True)

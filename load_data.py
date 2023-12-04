@@ -64,6 +64,7 @@ class DataLoader(object):
                         search_dic[head].update({tim : dict()})
                     if rel not in search_dic[head][tim]:
                         search_dic[head][tim].update({rel : []})
+                    # tail = str(t) + '.' + tail
                     search_dic[head][tim][rel].append(tail)
                 elif direction == 'left':
                     ## head batch
@@ -73,17 +74,23 @@ class DataLoader(object):
                         search_dic[tail].update({tim : dict()})
                     if rel not in search_dic[tail][tim]:
                         search_dic[tail][tim].update({rel : []})
+                    # head = str(h) + '.' + head
                     search_dic[tail][tim][rel].append(head)
         return search_dic
     
-    def load_test_quadruples(self, ):
+    def load_test_quadruples(self, direction='right'):
         test_samples = list()
+        left_true = direction in ['left', 'bi']
+        right_true = direction in ['right', 'bi']
 
         fp = open(os.path.join(self.dataset, self.inference_data_path), 'r', encoding='utf-8')
         for line in fp.readlines():
             h, r, t, tim = list(map(lambda x : int(x), line.strip().split('\t')))
             head, rel, tail = self.entity_dic[h], self.relation_dic[r], self.entity_dic[t]
-            test_samples.append((head, rel, tail, tim))
+            if right_true:
+                test_samples.append(((head, rel, tail, tim), "right"))
+            if left_true:
+                test_samples.append(((tail, rel, head, tim), "left"))
         return test_samples
 
 
@@ -99,16 +106,24 @@ class DataLoader(object):
         return None
 
     def update_history(self, timestamp_history):
-        ## Maybe delete tail search... it seems not to be used
-        for data in timestamp_history:
+        for data, direction in timestamp_history:
             h, r, t, ts = data
-            if h not in self.head_search:
-                self.head_search.update({h : dict()})
-            if ts not in self.head_search[h]:
-                self.head_search[h].update({ts : dict()})
-            if r not in self.head_search[h][ts]:
-                self.head_search[h][ts].update({r : []})
-            self.head_search[h][ts][r].append(t)
+            if direction == 'right':
+                if h not in self.head_search:
+                    self.head_search.update({h : dict()})
+                if ts not in self.head_search[h]:
+                    self.head_search[h].update({ts : dict()})
+                if r not in self.head_search[h][ts]:
+                    self.head_search[h][ts].update({r : []})
+                self.head_search[h][ts][r].append(t)
+            elif direction == 'left':
+                if h not in self.tail_search:
+                    self.tail_search.update({h : dict()})
+                if ts not in self.tail_search[h]:
+                    self.tail_search[h].update({ts : dict()})
+                if r not in self.tail_search[h][ts]:
+                    self.tail_search[h][ts].update({r : []})
+                self.tail_search[h][ts][r].append(t)
         return None
     
     def search_history(self, ent, rel, history_length, direction='right'):
@@ -129,32 +144,33 @@ class DataLoader(object):
             return tot[ -history_length : ]
         leng = len(tot)
 
-        ## padding history by entity itself
-        for timestamp in list(sorted(search_dict[ent].keys(), reverse=True)):
-            for another_rel in search_dict[ent][timestamp]:
-                if another_rel == rel:
-                    continue
-                for pair_ent in search_dict[ent][timestamp][another_rel]:
-                    tot.append((ent, another_rel, pair_ent, timestamp))
-                    leng += 1
-                    if leng == history_length:
-                        break
-                if leng == history_length:
-                    break
-            if leng == history_length:
-                break
-
-        ## padding history by relation
-        if leng != history_length:
-            for another_ent, dic in search_dict.items():
-                for timestamp in list(sorted(dic.keys(), reverse=True)):
-                    if rel in dic[timestamp]:
-                        tot.append((another_ent, rel, dic[timestamp][rel][0], timestamp))
+        if self.args.data_augment:
+            ## padding history by entity itself
+            for timestamp in list(sorted(search_dict[ent].keys(), reverse=True)):
+                for another_rel in search_dict[ent][timestamp]:
+                    if another_rel == rel:
+                        continue
+                    for pair_ent in search_dict[ent][timestamp][another_rel]:
+                        tot.append((ent, another_rel, pair_ent, timestamp))
                         leng += 1
+                        if leng == history_length:
+                            break
                     if leng == history_length:
                         break
                 if leng == history_length:
                     break
+
+            ## padding history by relation
+            if leng != history_length:
+                for another_ent, dic in search_dict.items():
+                    for timestamp in list(sorted(dic.keys(), reverse=True)):
+                        if rel in dic[timestamp]:
+                            tot.append((another_ent, rel, dic[timestamp][rel][0], timestamp))
+                            leng += 1
+                        if leng == history_length:
+                            break
+                    if leng == history_length:
+                        break
         
         return tot
 

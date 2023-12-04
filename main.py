@@ -132,21 +132,22 @@ def run(args):
         data_loader.generate_history()
         id2ent, id2rel = data_loader.entity_dic, data_loader.relation_dic
         ### valid data in fine-tune and test data in inference
-        test_samples = data_loader.load_test_quadruples()
+        test_samples = data_loader.load_test_quadruples(direction=args.inference_direction)
         val_set_size = args.val_size
         ### dump prompt 
         prompt_save_dir = os.path.join(args.prompt_path, args.dataset)
         if not os.path.exists(prompt_save_dir):
             os.makedirs(prompt_save_dir)
-        prompt_save_file = os.path.join(prompt_save_dir, '{}_{}.json'.format(args.base_model, args.history_length))
+        aug = "aug" if args.data_augment else "noaug"
+        prompt_save_file = os.path.join(prompt_save_dir, '{}_{}_{}_{}.json'.format(args.base_model, args.history_length, args.inference_direction, aug))
         template_path = os.path.join(args.template_path, args.base_model + '.json')
         prompter = Prompter(template_path, id2ent, id2rel)
         if os.path.exists(prompt_save_file):
             prompts = json.load(open(prompt_save_file, 'r'))
         else:
             prompts = []
-            timeflow, timestamp_history = test_samples[0][3], [] # start time in test period
-            for sample in tqdm(test_samples):
+            timeflow, timestamp_history = test_samples[0][0][3], [] # start time in test period
+            for sample, direction in tqdm(test_samples):
                 h, r, t, ts = sample
                 if ts != timeflow:
                     ### timestamp change, updating history list
@@ -154,16 +155,13 @@ def run(args):
                     data_loader.update_history(timestamp_history)
                     timestamp_history = []
 
-                timestamp_history.append(sample)
-                history_list = data_loader.search_history(h, r, args.history_length, 'right')
-                if len(history_list) != args.history_length:
+                timestamp_history.append((sample, direction))
+                history_list = data_loader.search_history(h, r, args.history_length, direction)
+                if len(history_list) == 0:
                     continue
                 prompt = prompter.prepare_prompt((h, r, ts), history_list, response=t)
                 prompts.append(prompt)
 
-                if args.add_reciprocal:
-                    # TODO
-                    pass
             json.dump(prompts, open(prompt_save_file, 'w'))
 
 
@@ -345,11 +343,13 @@ if __name__ == "__main__":
     parser.add_argument("--sm-batch-size", type=int, default=2, help='small batch size')
     parser.add_argument("--n-ft-epoch", type=int, default=2, help='fine-tuning epoch')
     parser.add_argument("--prepare-kbit", action='store_true', help='whether prepare for kbit training')
+    parser.add_argument("--inference-direction", choices=['right', 'left', 'bi'], default='right', type=str, help='type of data used')
     parser.add_argument("--lr", type=float, default=2e-5, help='learning rate during fine-tuning')
     parser.add_argument("--truncation-length", type=int, default=1500, help='truncation length limit')
     parser.add_argument("--train-on-inputs", type=bool, default=True, help='whether training on inputs data')
     parser.add_argument("--add-eos-tokens", type=bool, default=False, help='whether adding eos')
     parser.add_argument("--prompt-template", type=str, default='llama', help='prompt template')
+    parser.add_argument("--data-augment", action='store_true', help='whether use other information to pad history')
     # Configure for lora
     parser.add_argument("--lora-rank", type=int, default=32, help='lora rank')
     parser.add_argument("--lora-alpha", type=int, default=16, help='lora alpha')
