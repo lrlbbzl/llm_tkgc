@@ -21,6 +21,8 @@ from load_data import DataLoader
 from prompt import Prompter
 from accelerate import init_empty_weights,infer_auto_device_map,load_checkpoint_in_model,dispatch_model
 import warnings
+from dataclasses import dataclass
+
 warnings.filterwarnings('ignore')
 
 from peft import (
@@ -32,6 +34,27 @@ from peft import (
     set_peft_model_state_dict,
 )
 
+@dataclass
+class hit1:
+    right: int = 0
+    total: int = 0
+    sentence: str = "The missing entity of query quadruplet is "
+    def update(self, response, answer):
+        st = response.find(self.sentence) + len(self.sentence)
+        response = response[st : ]
+        if response.find('.\n') != -1:
+            response = response[:response.find('.\n')]
+        elif response.find('.</s>') != -1:
+            response = response[:response.find('.</s>')]
+        else:
+            response = response[:response.find('.')]
+        if response == answer:
+            self.right += 1
+        self.total += 1
+    
+    def acc(self, ):
+        return self.right / self.total
+    
 
 def inference(args):
     use_cuda = args.gpu >= 0 and torch.cuda.is_available()
@@ -74,7 +97,7 @@ def inference(args):
     prompt_save_file = os.path.join(args.prompt_path, args.dataset, "{}_{}_{}_{}_test.json".format(args.base_model, args.history_length, args.inference_direction, aug))
     template_path = os.path.join(args.template_path, args.base_model + '.json')
 
-    prompter = Prompter(template_path, id2ent, id2rel)
+    prompter = Prompter(args, template_path, id2ent, id2rel)
     if os.path.exists(prompt_save_file):
         prompts = json.load(open(prompt_save_file, 'r'))
     else:
@@ -104,8 +127,10 @@ def inference(args):
         # no_repeat_ngram_size=2
     )
     result = []
-    with torch.no_grad():
-        for test_sample in tqdm(prompts):
+    h1 = hit1()
+    prompts = prompts[args.partial_num : ]
+    with torch.no_grad(), tqdm(prompts) as tbar:
+        for test_sample in tbar:
             query, answer = test_sample['query'], test_sample['response']
             prompt = prompter.generate_prompt(query)
             model_inputs = tokenizer(prompt, return_tensors="pt")
@@ -121,6 +146,9 @@ def inference(args):
 
             inputs_text = tokenizer.decode(input_ids[0])
             output = tokenizer.decode(generate_ids.sequences[0]).replace(inputs_text, "")
+            h1.update(output, answer)
+            tbar.set_postfix({'acc': f'{h1.acc()}'})
+            tbar.update()
             if args.check_example:
                 print('*' * 20)
                 print(output)
@@ -152,6 +180,8 @@ if __name__ == "__main__":
     parser.add_argument("--add-prefix", action='store_true', help='whether use kge prefix')
     parser.add_argument("--inference-direction", type=str, default='right', choices=['right', 'left', 'bi'])
     parser.add_argument("--data-augment", action='store_true',)
+    parser.add_argument("--partial-num", type=int, default=0, help='inference start point')
+    parser.add_argument("--use-id", action='store_true')
 
     parser.add_argument("--history-length", type=int, default=8, help='history references')
     parser.add_argument("--output-dir", type=str, default='./outputs', help='output dirs')

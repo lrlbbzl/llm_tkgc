@@ -1,7 +1,7 @@
 import json
 import os
 dir_path = "./outputs/ICEWS14"
-path = os.path.join(dir_path, 'llama_len10_paged', 'results_left.json')
+path = os.path.join(dir_path, 'llama_len20_bi_aug', 'results_left.json')
 sentence = "The missing entity of query quadruplet is "
 
 y = json.load(open(path, 'r'))

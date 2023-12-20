@@ -2,12 +2,13 @@ import json
 import os.path as osp
 from typing import Union
 import re
-
+import random
 
 class Prompter(object):
-    def __init__(self, template, id2ent, id2rel):
+    def __init__(self, args, template, id2ent, id2rel):
         super(Prompter, self).__init__()
         template = json.load(open(template, 'r'))
+        self.args = args
         self.query_template = template['query']
         self.response_template = template['response']
         self.id2ent = id2ent
@@ -25,13 +26,37 @@ class Prompter(object):
         history_list = sorted(history_list, key=lambda x : x[3])
         given_history = "History:\n" 
 
-        for history in history_list:
-            h, r, t = history[0], history[1], history[2]
-            single = "{}: [{}, {}, {}]\n".format(history[3], h, r, t)
-            given_history += single
+        if self.args.useid:
+            ## serve for ordered
+            mp = dict()
+            for (h, r, t, ts) in history_list:
+                if t not in mp:
+                    mp.update({t : 0})
+                mp[t] += 1
+            items = sorted(mp.items(), key=lambda x : x[1], reverse=True)
+            order = {k : i for i, (k, v) in enumerate(items)}
 
-        q = "\nQuery:\n{}: [{}, {}, ]\n".format(query[2], query[0], query[1])
-        response = response if response is not None else None
+            for history in history_list:
+                h, r, t = history[0], history[1], history[2]
+                single = "{}: [{}, {}, {}.{}]\n".format(history[3], h, r, order[t], t)
+                given_history += single
+
+            q = "\nQuery:\n{}: [{}, {}, ]\n".format(query[2], query[0], query[1])
+            if response is not None:
+                if response in order:
+                    response = '{}.{}'.format(order[response], response)
+                else:
+                    random_id = random.choice([i for i in range(len(order), 100)])
+                    response = '{}.{}'.format(random_id, response)
+        else:
+            for history in history_list:
+                h, r, t = history[0], history[1], history[2]
+                single = "{}: [{}, {}, {}]\n".format(history[3], h, r, t)
+                given_history += single
+
+            q = "{}: [{}, {}, ".format(query[2], query[0], query[1])
+            if response is not None:
+                response = '{}'.format(response)
 
         return {
             'query' : given_history + q,

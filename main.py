@@ -141,7 +141,7 @@ def run(args):
         aug = "aug" if args.data_augment else "noaug"
         prompt_save_file = os.path.join(prompt_save_dir, '{}_{}_{}_{}.json'.format(args.base_model, args.history_length, args.inference_direction, aug))
         template_path = os.path.join(args.template_path, args.base_model + '.json')
-        prompter = Prompter(template_path, id2ent, id2rel)
+        prompter = Prompter(args, template_path, id2ent, id2rel)
         if os.path.exists(prompt_save_file):
             prompts = json.load(open(prompt_save_file, 'r'))
         else:
@@ -305,15 +305,12 @@ def run(args):
         if args.add_prefix:
             torch.save(prefix_model.embeddings, os.path.join(args.output_dir, "embeddings.pth"))
 
-def check_args(args):
-    if args.dataset not in ['ICEWS14', 'ICEWS18', 'ICEWS05-15', 'YAGO', 'WIKI']:
-        raise Exception("Invalid dataset name.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='LLM for TKGC')
 
     parser.add_argument('--data-path', type=str, default='./data', help='data path')
-    parser.add_argument("--dataset", type=str, default='ICEWS14', help='select dataset')
+    parser.add_argument("--dataset", type=str, default='ICEWS14', help='select dataset', choices=['ICEWS14', 'ICEWS18', 'ICEWS05-15', 'YAGO', 'WIKI'])
     parser.add_argument("--save-path", type=str, default='./pretrained_emb', help='embedding save path')
     parser.add_argument("--template-path", type=str, default='./templates', help='prompt template path')
     parser.add_argument("--prompt-path", type=str, default='./prompts', help='prompt save path')
@@ -334,6 +331,7 @@ if __name__ == "__main__":
     parser.add_argument("--kge-batch-size", type=int, default=500, help='batch size in KGE')
     parser.add_argument("--grad-norm", type=float, default=1., help='grad norm during training')
     parser.add_argument("--add-prefix", action='store_true', help='whether add prefix embedding')
+    parser.add_argument("--useid", action='store_true')
     # Configure for phase
     parser.add_argument("--do-pretrain", action='store_true', help='whether pretrain KGE')
     parser.add_argument("--do-finetune", action='store_true', help='whether fine-tuning')
@@ -345,7 +343,7 @@ if __name__ == "__main__":
     parser.add_argument("--prepare-kbit", action='store_true', help='whether prepare for kbit training')
     parser.add_argument("--inference-direction", choices=['right', 'left', 'bi'], default='right', type=str, help='type of data used')
     parser.add_argument("--lr", type=float, default=2e-5, help='learning rate during fine-tuning')
-    parser.add_argument("--truncation-length", type=int, default=1500, help='truncation length limit')
+    parser.add_argument("--truncation-length", type=int, default=3000, help='truncation length limit')
     parser.add_argument("--train-on-inputs", type=bool, default=True, help='whether training on inputs data')
     parser.add_argument("--add-eos-tokens", type=bool, default=False, help='whether adding eos')
     parser.add_argument("--prompt-template", type=str, default='llama', help='prompt template')
@@ -365,7 +363,6 @@ if __name__ == "__main__":
     parser.add_argument("--run-name", type=str, default='llama-2-7b', help='tag for checking in wandb')
     args = parser.parse_args()
 
-    check_args(args)
 
     # start
     run(args)
