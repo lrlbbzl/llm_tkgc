@@ -98,24 +98,22 @@ def inference(args):
     template_path = os.path.join(args.template_path, args.base_model + '.json')
 
     prompter = Prompter(args, template_path, id2ent, id2rel)
-    if os.path.exists(prompt_save_file):
-        prompts = json.load(open(prompt_save_file, 'r'))
-    else:
-        prompts = []
-        timeflow, timestamp_history = test_samples[0][0][3], []
-        for sample, direction in tqdm(test_samples):
-            h, r, t, ts = sample
-            if ts != timeflow:
-                ### timestamp change, updating history list
-                timeflow = ts
-                data_loader.update_history(timestamp_history)
-                timestamp_history = []
-            timestamp_history.append((sample, direction))
-            history_list = data_loader.search_history(h, r, args.history_length, direction)
-            prompt = prompter.prepare_prompt((h, r, ts), history_list, response=t)
-            prompts.append(prompt)
+    
+    prompts = []
+    timeflow, timestamp_history = test_samples[0][0][3], []
+    for sample, direction in tqdm(test_samples):
+        h, r, t, ts = sample
+        if ts != timeflow:
+            ### timestamp change, updating history list
+            timeflow = ts
+            data_loader.update_history(timestamp_history)
+            timestamp_history = []
+        timestamp_history.append((sample, direction))
+        history_list = data_loader.search_history(h, r, args.history_length, direction)
+        prompt = prompter.prepare_prompt((h, r, ts), history_list, response=t)
+        prompts.append(prompt)
 
-        json.dump(prompts, open(prompt_save_file, 'w'))
+    json.dump(prompts, open(prompt_save_file, 'w'))
 
 
     generation_config = GenerationConfig(
@@ -181,7 +179,7 @@ if __name__ == "__main__":
     parser.add_argument("--inference-direction", type=str, default='right', choices=['right', 'left', 'bi'])
     parser.add_argument("--data-augment", action='store_true',)
     parser.add_argument("--partial-num", type=int, default=0, help='inference start point')
-    parser.add_argument("--use-id", action='store_true')
+    parser.add_argument("--useid", action='store_true')
 
     parser.add_argument("--history-length", type=int, default=8, help='history references')
     parser.add_argument("--output-dir", type=str, default='./outputs', help='output dirs')

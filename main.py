@@ -142,27 +142,25 @@ def run(args):
         prompt_save_file = os.path.join(prompt_save_dir, '{}_{}_{}_{}.json'.format(args.base_model, args.history_length, args.inference_direction, aug))
         template_path = os.path.join(args.template_path, args.base_model + '.json')
         prompter = Prompter(args, template_path, id2ent, id2rel)
-        if os.path.exists(prompt_save_file):
-            prompts = json.load(open(prompt_save_file, 'r'))
-        else:
-            prompts = []
-            timeflow, timestamp_history = test_samples[0][0][3], [] # start time in test period
-            for sample, direction in tqdm(test_samples):
-                h, r, t, ts = sample
-                if ts != timeflow:
-                    ### timestamp change, updating history list
-                    timeflow = ts
-                    data_loader.update_history(timestamp_history)
-                    timestamp_history = []
+        
+        prompts = []
+        timeflow, timestamp_history = test_samples[0][0][3], [] # start time in test period
+        for sample, direction in tqdm(test_samples):
+            h, r, t, ts = sample
+            if ts != timeflow:
+                ### timestamp change, updating history list
+                timeflow = ts
+                data_loader.update_history(timestamp_history)
+                timestamp_history = []
 
-                timestamp_history.append((sample, direction))
-                history_list = data_loader.search_history(h, r, args.history_length, direction)
-                if len(history_list) == 0:
-                    continue
-                prompt = prompter.prepare_prompt((h, r, ts), history_list, response=t)
-                prompts.append(prompt)
+            timestamp_history.append((sample, direction))
+            history_list = data_loader.search_history(h, r, args.history_length, direction)
+            if len(history_list) == 0:
+                continue
+            prompt = prompter.prepare_prompt((h, r, ts), history_list, response=t)
+            prompts.append(prompt)
 
-            json.dump(prompts, open(prompt_save_file, 'w'))
+        json.dump(prompts, open(prompt_save_file, 'w'))
 
 
         ## Tokenize

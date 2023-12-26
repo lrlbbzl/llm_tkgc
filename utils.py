@@ -1,6 +1,7 @@
 import torch
 from torch import Tensor
 import numpy as np
+import dgl
 from collections import defaultdict
 import sys
 

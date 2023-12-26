@@ -54,7 +54,8 @@ class Prompter(object):
                 single = "{}: [{}, {}, {}]\n".format(history[3], h, r, t)
                 given_history += single
 
-            q = "{}: [{}, {}, ".format(query[2], query[0], query[1])
+            # q = "{}: [{}, {}, ".format(query[2], query[0], query[1])
+            q = "\nQuery:\n{}: [{}, {}, ]\n".format(query[2], query[0], query[1])
             if response is not None:
                 response = '{}'.format(response)
 
