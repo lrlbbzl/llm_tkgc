@@ -101,6 +101,7 @@ def inference(args):
     
     prompts = []
     timeflow, timestamp_history = test_samples[0][0][3], []
+    lengths = []
     for sample, direction in tqdm(test_samples):
         h, r, t, ts = sample
         if ts != timeflow:
@@ -110,9 +111,10 @@ def inference(args):
             timestamp_history = []
         timestamp_history.append((sample, direction))
         history_list = data_loader.search_history(h, r, args.history_length, direction)
+        lengths.append(len(history_list))
         prompt = prompter.prepare_prompt((h, r, ts), history_list, response=t)
         prompts.append(prompt)
-
+    print(sum(lengths) / len(lengths))
     json.dump(prompts, open(prompt_save_file, 'w'))
 
 

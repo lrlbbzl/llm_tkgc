@@ -132,14 +132,14 @@ def run(args):
         data_loader.generate_history()
         id2ent, id2rel = data_loader.entity_dic, data_loader.relation_dic
         ### valid data in fine-tune and test data in inference
-        test_samples = data_loader.load_test_quadruples(direction=args.inference_direction)
+        test_samples = data_loader.load_test_quadruples(direction=args.ft_direction)
         val_set_size = args.val_size
         ### dump prompt 
         prompt_save_dir = os.path.join(args.prompt_path, args.dataset)
         if not os.path.exists(prompt_save_dir):
             os.makedirs(prompt_save_dir)
         aug = "aug" if args.data_augment else "noaug"
-        prompt_save_file = os.path.join(prompt_save_dir, '{}_{}_{}_{}.json'.format(args.base_model, args.history_length, args.inference_direction, aug))
+        prompt_save_file = os.path.join(prompt_save_dir, '{}_{}_{}_{}.json'.format(args.base_model, args.history_length, args.ft_direction, aug))
         template_path = os.path.join(args.template_path, args.base_model + '.json')
         prompter = Prompter(args, template_path, id2ent, id2rel)
         
@@ -159,7 +159,6 @@ def run(args):
                 continue
             prompt = prompter.prepare_prompt((h, r, ts), history_list, response=t)
             prompts.append(prompt)
-
         json.dump(prompts, open(prompt_save_file, 'w'))
 
 
@@ -312,7 +311,7 @@ if __name__ == "__main__":
     parser.add_argument("--save-path", type=str, default='./pretrained_emb', help='embedding save path')
     parser.add_argument("--template-path", type=str, default='./templates', help='prompt template path')
     parser.add_argument("--prompt-path", type=str, default='./prompts', help='prompt save path')
-    parser.add_argument("--base-model-path", type=str, default='./models', help='base llm')
+    parser.add_argument("--base-model-path", type=str, default='/mnt/data/lrl23/models', help='base llm')
     parser.add_argument("--base-model", type=str, default='Llama-2-7b-ms', help='base llm')
     parser.add_argument("--gpu", type=int, default=1, help='gpu id')
 
@@ -339,7 +338,7 @@ if __name__ == "__main__":
     parser.add_argument("--sm-batch-size", type=int, default=2, help='small batch size')
     parser.add_argument("--n-ft-epoch", type=int, default=2, help='fine-tuning epoch')
     parser.add_argument("--prepare-kbit", action='store_true', help='whether prepare for kbit training')
-    parser.add_argument("--inference-direction", choices=['right', 'left', 'bi'], default='right', type=str, help='type of data used')
+    parser.add_argument("--ft-direction", choices=['right', 'left', 'bi'], default='right', type=str, help='type of data used')
     parser.add_argument("--lr", type=float, default=2e-5, help='learning rate during fine-tuning')
     parser.add_argument("--truncation-length", type=int, default=3000, help='truncation length limit')
     parser.add_argument("--train-on-inputs", type=bool, default=True, help='whether training on inputs data')

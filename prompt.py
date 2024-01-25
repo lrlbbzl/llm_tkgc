@@ -46,7 +46,7 @@ class Prompter(object):
                 if response in order:
                     response = '{}.{}'.format(order[response], response)
                 else:
-                    random_id = random.choice([i for i in range(len(order), 100)])
+                    random_id = random.choice([i for i in range(len(order), len(order) + 10)])
                     response = '{}.{}'.format(random_id, response)
         else:
             for history in history_list:
